@@ -46,12 +46,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
   FastAPI `POST /order`: serialize request to JSON, upload to blob store via
   `shared/blob.py`, build initial Envelope, start `OrderWorkflow` via Temporal client.
 
-- [ ] **IS-002 -- Blob client wrapper**
-  `shared/blob.py`: thin wrapper around `remote-store` `Store` API.
-  `upload(data, path) -> BlobRef` and `download(ref) -> bytes`.
-  Store URL read from `STORE_URL` env var; supports Azurite (local dev) and Azure
-  (prod) via remote-store backend switching — no code changes required.
-
 ---
 
 ## Ideas
