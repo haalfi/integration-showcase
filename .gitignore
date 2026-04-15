@@ -31,6 +31,9 @@ htmlcov/
 tmp/
 *.local
 
+# Claude local settings (machine-specific permissions)
+.claude/settings.local.json
+
 # Env files
 .env
 .env.*
