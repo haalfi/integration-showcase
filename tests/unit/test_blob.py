@@ -5,16 +5,32 @@ from __future__ import annotations
 import hashlib
 
 import pytest
-from remote_store import Store
-from remote_store.backends._memory import MemoryBackend
+from remote_store import NotFound, Store
+from remote_store.backends import MemoryBackend
 
-from integration_showcase.shared.blob import download, upload
+from integration_showcase.shared.blob import _make_store, download, upload
 from integration_showcase.shared.envelope import BlobRef
 
 
 @pytest.fixture()
 def store() -> Store:
     return Store(MemoryBackend())
+
+
+class TestMakeStore:
+    def test_raises_key_error_when_store_url_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("STORE_URL", raising=False)
+        monkeypatch.delenv("STORE_CONTAINER", raising=False)
+        with pytest.raises(KeyError, match="STORE_URL"):
+            _make_store()
+
+    def test_raises_key_error_when_store_container_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("STORE_URL", "UseDevelopmentStorage=true")
+        monkeypatch.delenv("STORE_CONTAINER", raising=False)
+        with pytest.raises(KeyError, match="STORE_CONTAINER"):
+            _make_store()
 
 
 class TestUpload:
@@ -61,8 +77,6 @@ class TestDownload:
 
     def test_raises_not_found_for_missing_blob(self, store: Store) -> None:
         ref = BlobRef(blob_url="does/not/exist.bin", sha256="a" * 64)
-        from remote_store import NotFound
-
         with pytest.raises(NotFound):
             download(ref, _store=store)
 

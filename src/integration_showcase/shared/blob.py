@@ -12,7 +12,7 @@ import hashlib
 import os
 
 from remote_store import Store
-from remote_store.backends._azure import AzureBackend
+from remote_store.backends import AzureBackend
 
 from integration_showcase.shared.envelope import BlobRef
 

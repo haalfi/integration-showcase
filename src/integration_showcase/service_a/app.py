@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
-
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -26,6 +24,5 @@ async def create_order(request: OrderRequest) -> OrderResponse:
 
     IS-003: implement blob upload, envelope construction, workflow start.
     """
-    _business_tx_id = str(uuid.uuid4())
     # TODO IS-003
     raise NotImplementedError("IS-003")

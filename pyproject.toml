@@ -56,6 +56,7 @@ packages = ["src/integration_showcase"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not integration'"
 markers = [
   "integration: mark test as requiring Docker services (docker compose up -d)",
 ]

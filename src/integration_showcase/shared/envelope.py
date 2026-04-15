@@ -14,8 +14,9 @@ class BlobRef(BaseModel):
 
     ``blob_url`` is a remote-store compatible path (e.g. ``workflows/tx-001/input.json``).
     ``sha256`` is computed by the uploader before upload and verified by the downloader
-    after download. ``etag`` and ``version_id`` are populated when the backing store
-    supports them (Azure Blob Storage); left empty for local/memory backends.
+    after download. ``etag`` and ``version_id`` are reserved for future use; the
+    remote-store ``Store.write`` API does not return write metadata, so both fields
+    default to ``""`` and are not populated by :func:`~shared.blob.upload`.
     """
 
     blob_url: str
