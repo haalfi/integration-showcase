@@ -1,0 +1,59 @@
+# Development Backlog
+
+Active work items. Completed items live in [BACKLOG-DONE.md](BACKLOG-DONE.md).
+
+Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
+
+## How this file works
+
+**Status legend:** `[ ]` pending · `[~]` in progress
+
+**Ordering:** newest first within each section.
+
+**Completing work:**
+- Fully done -> delete from here, add to `BACKLOG-DONE.md` as `[x]` (same commit as code change).
+- Partially done -> split: ship done part to `BACKLOG-DONE.md` under original ID, create new ID here
+  for remainder, link both.
+
+**ID prefixes:**
+
+| Prefix | Meaning |
+|--------|---------|
+| `BL-NNN` | Release blocker. |
+| `BK-NNN` | Committed backlog work, queued behind blockers. |
+| `BUG-NNN` | Confirmed defect with reproduction steps. |
+| `IS-NNN` | Showcase item. |
+
+---
+
+## Backlog (Prioritized)
+
+- [ ] **IS-006 -- Scenario scripts**
+  Implement `scenarios/run_happy.py` and `run_unhappy.py`: POST to Service A, wait for
+  workflow completion, print Jaeger and Temporal UI links.
+
+- [ ] **IS-005 -- OTel instrumentation**
+  Add span attributes (`business_tx_id`, `workflow_id`, `run_id`, `step_id`,
+  `payload_ref_sha256`) to every activity and the workflow itself.
+  Propagate W3C `traceparent` + `baggage` via Envelope fields at every service boundary.
+
+- [ ] **IS-004 -- Activity implementations (B/C/D)**
+  Real logic per activity: download payload via `shared/blob.py`, execute local
+  domain action (SQLite write), upload result blob, return new `BlobRef`.
+  Includes `compensate_reserve_inventory` (idempotent release).
+
+- [ ] **IS-003 -- Service A: HTTP ingress**
+  FastAPI `POST /order`: serialize request to JSON, upload to blob store via
+  `shared/blob.py`, build initial Envelope, start `OrderWorkflow` via Temporal client.
+
+- [ ] **IS-002 -- Blob client wrapper**
+  `shared/blob.py`: thin wrapper around `remote-store` `Store` API.
+  `upload(data, path) -> BlobRef` and `download(ref) -> bytes`.
+  Store URL read from `STORE_URL` env var; supports Azurite (local dev) and Azure
+  (prod) via remote-store backend switching — no code changes required.
+
+---
+
+## Ideas
+
+*(none yet)*

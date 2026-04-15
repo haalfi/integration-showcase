@@ -1,0 +1,28 @@
+# OpenTelemetry Collector config (optional -- for when a collector pipeline is needed
+# between services and Jaeger, e.g. for batching, attribute enrichment, or routing).
+# Currently services send OTLP traces directly to Jaeger (port 4317).
+# Swap the OTEL_EXPORTER_OTLP_ENDPOINT env var to point here instead.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  otlp:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]

@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Hatch / virtualenv
+.hatch/
+.venv/
+venv/
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# Pytest
+.pytest_cache/
+
+# Mypy
+.mypy_cache/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Local temp files
+tmp/
+*.local
+
+# Env files
+.env
+.env.*
+!.env.example

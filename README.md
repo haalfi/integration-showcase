@@ -1,0 +1,61 @@
+# integration-showcase
+
+**Temporal · Azure Blob (`remote-store`) · OpenTelemetry** — distributed saga orchestration showcase.
+
+Demonstrates durable saga orchestration, the Claim-Check payload pattern, and full
+end-to-end traceability across service boundaries using a canonical Envelope.
+
+## What it shows
+
+An order fulfillment saga across four services:
+
+| Service | Role |
+|---|---|
+| **A** | HTTP ingress — writes payload blob, starts Temporal workflow |
+| **B** | Inventory — reserves stock, uploads result blob |
+| **C** | Payment — charges customer, uploads receipt blob; compensated on failure |
+| **D** | Shipping — dispatches order |
+
+Services exchange only a canonical **Envelope** (never raw payloads). Azure Blob Storage
+(via [remote-store](https://github.com/haalfi/remote-store)) is the payload vault.
+OpenTelemetry spans link the full trace — including retries and compensation — via a
+stable `business_tx_id`.
+
+See [sdd/research/research-temporal-azure-otel-orchestration.md](sdd/research/research-temporal-azure-otel-orchestration.md)
+for full architecture details (German).
+
+## Quick start
+
+```bash
+docker compose up -d
+hatch run test
+python scenarios/run_happy.py    # full happy-path -> Jaeger trace
+python scenarios/run_unhappy.py  # payment failure + compensation -> trace
+```
+
+| UI | URL |
+|---|---|
+| Jaeger traces | http://localhost:16686 |
+| Temporal workflows | http://localhost:8088 |
+| Azurite blob storage | http://localhost:10000 |
+
+## Dev commands
+
+```bash
+hatch run all           # lint + format-check + test (pre-commit gate)
+hatch run test          # unit tests only
+hatch run lint          # ruff check
+hatch run typecheck     # mypy
+```
+
+## Config switching (remote-store)
+
+Blob I/O uses `remote-store`. Switch backends via env var — no code changes:
+
+```bash
+# Local dev (Azurite)
+STORE_URL="DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;..."
+
+# Production Azure
+STORE_URL=az://myaccount/workflows
+```
