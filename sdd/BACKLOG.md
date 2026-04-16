@@ -36,6 +36,8 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
   Add span attributes (`business_tx_id`, `workflow_id`, `run_id`, `step_id`,
   `payload_ref_sha256`) to every activity and the workflow itself.
   Propagate W3C `traceparent` + `baggage` via Envelope fields at every service boundary.
+  **Prerequisite:** update `pyproject.toml` dependency to `remote-store[azure,otel]` before
+  using `remote_store.ext.otel` (`otel_hooks` / `otel_observe`) for store-level tracing spans.
 
 - [ ] **IS-004 -- Activity implementations (B/C/D)**
   Real logic per activity: download payload via `shared/blob.py`, execute local
