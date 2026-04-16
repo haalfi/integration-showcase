@@ -53,30 +53,27 @@ def dispatch_shipment(envelope: Envelope) -> BlobRef:
 
     with db.connect(_db_path()) as conn:
         conn.execute(_DDL)
+        # INSERT OR IGNORE: concurrent first-attempt calls race silently;
+        # the unconditional re-read returns whichever row was persisted.
+        conn.execute(
+            "INSERT OR IGNORE INTO shipments"
+            " (idempotency_key, business_tx_id, shipment_id, charge_id, dispatched_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                envelope.idempotency_key,
+                envelope.business_tx_id,
+                f"shp-{uuid.uuid4()}",
+                charge_id,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
         row = conn.execute(
             "SELECT shipment_id, charge_id, dispatched_at FROM shipments WHERE idempotency_key = ?",
             (envelope.idempotency_key,),
         ).fetchone()
-
-        if row is None:
-            shipment_id = f"shp-{uuid.uuid4()}"
-            dispatched_at = datetime.now(UTC).isoformat()
-            conn.execute(
-                "INSERT INTO shipments"
-                " (idempotency_key, business_tx_id, shipment_id, charge_id, dispatched_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (
-                    envelope.idempotency_key,
-                    envelope.business_tx_id,
-                    shipment_id,
-                    charge_id,
-                    dispatched_at,
-                ),
-            )
-        else:
-            shipment_id = row["shipment_id"]
-            charge_id = row["charge_id"]
-            dispatched_at = row["dispatched_at"]
+        shipment_id = row["shipment_id"]
+        charge_id = row["charge_id"]
+        dispatched_at = row["dispatched_at"]
 
     result = {
         "business_tx_id": envelope.business_tx_id,

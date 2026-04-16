@@ -59,32 +59,31 @@ def reserve_inventory(envelope: Envelope) -> BlobRef:
 
     with db.connect(_db_path()) as conn:
         conn.execute(_DDL)
+        # INSERT OR IGNORE: if two concurrent first-attempt calls race here,
+        # the loser's INSERT is silently dropped (rather than raising
+        # IntegrityError). The unconditional re-read below means both callers
+        # end up reading the winner's row, so result bytes and BlobRef.sha256
+        # are identical regardless of which call "won".
+        conn.execute(
+            "INSERT OR IGNORE INTO inventory_reservations"
+            " (idempotency_key, business_tx_id, reservation_id, items, reserved_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                envelope.idempotency_key,
+                envelope.business_tx_id,
+                f"res-{uuid.uuid4()}",
+                json.dumps(list(input_data["items"])),
+                datetime.now(UTC).isoformat(),
+            ),
+        )
         row = conn.execute(
             "SELECT reservation_id, items, reserved_at"
             " FROM inventory_reservations WHERE idempotency_key = ?",
             (envelope.idempotency_key,),
         ).fetchone()
-
-        if row is None:
-            reservation_id = f"res-{uuid.uuid4()}"
-            items = list(input_data["items"])
-            reserved_at = datetime.now(UTC).isoformat()
-            conn.execute(
-                "INSERT INTO inventory_reservations"
-                " (idempotency_key, business_tx_id, reservation_id, items, reserved_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (
-                    envelope.idempotency_key,
-                    envelope.business_tx_id,
-                    reservation_id,
-                    json.dumps(items),
-                    reserved_at,
-                ),
-            )
-        else:
-            reservation_id = row["reservation_id"]
-            items = json.loads(row["items"])
-            reserved_at = row["reserved_at"]
+        reservation_id = row["reservation_id"]
+        items = json.loads(row["items"])
+        reserved_at = row["reserved_at"]
 
     result = {
         "business_tx_id": envelope.business_tx_id,

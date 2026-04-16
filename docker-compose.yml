@@ -13,6 +13,8 @@ services:
       retries: 10
 
   temporal:
+    # Pinned to 'latest' -- tctl (the old CLI) was removed from recent images;
+    # pin to a specific digest once the stack is confirmed stable.
     image: temporalio/auto-setup:latest
     environment:
       DB: postgres12
@@ -26,13 +28,17 @@ services:
       postgresql:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "tctl --address localhost:7233 cluster health 2>/dev/null || exit 1"]
+      # tctl reached End of Support 2025-09-30; use the current Temporal CLI.
+      # auto-setup binds to the container's NIC IP (not localhost), so we
+      # resolve it at runtime via $(hostname -i).
+      test: ["CMD-SHELL", "temporal operator cluster health --address $(hostname -i):7233"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
 
   temporal-ui:
+    # Pinned to 'latest' -- 2.31 tag not available on Docker Hub.
     image: temporalio/ui:latest
     environment:
       TEMPORAL_ADDRESS: temporal:7233
@@ -43,11 +49,15 @@ services:
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+    # --skipApiVersionCheck: azure-storage-blob SDK sends API version 2026-02-06;
+    # azurite 3.35.0 does not list it as supported but handles it correctly.
+    # Remove once azurite releases with explicit 2026-02-06 support.
     command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
     ports:
       - "10000:10000"
 
   jaeger:
+    # Pinned to 'latest' -- 1.62 tag not available on Docker Hub.
     image: jaegertracing/all-in-one:latest
     environment:
       COLLECTOR_OTLP_ENABLED: "true"

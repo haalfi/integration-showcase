@@ -77,38 +77,36 @@ def charge_payment(envelope: Envelope) -> BlobRef:
 
     with db.connect(_db_path()) as conn:
         conn.execute(_DDL)
+        # INSERT OR IGNORE: concurrent first-attempt calls race silently;
+        # the unconditional re-read returns whichever row was persisted.
+        conn.execute(
+            "INSERT OR IGNORE INTO payments"
+            " (idempotency_key, business_tx_id, charge_id, amount_cents, status, charged_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                envelope.idempotency_key,
+                envelope.business_tx_id,
+                f"ch-{uuid.uuid4()}",
+                amount_cents,
+                "CHARGED",
+                datetime.now(UTC).isoformat(),
+            ),
+        )
         row = conn.execute(
             "SELECT charge_id, amount_cents, status, charged_at"
             " FROM payments WHERE idempotency_key = ?",
             (envelope.idempotency_key,),
         ).fetchone()
-
-        if row is None:
-            charge_id = f"ch-{uuid.uuid4()}"
-            charged_at = datetime.now(UTC).isoformat()
-            conn.execute(
-                "INSERT INTO payments"
-                " (idempotency_key, business_tx_id, charge_id, amount_cents, status, charged_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    envelope.idempotency_key,
-                    envelope.business_tx_id,
-                    charge_id,
-                    amount_cents,
-                    "CHARGED",
-                    charged_at,
-                ),
-            )
-        else:
-            charge_id = row["charge_id"]
-            amount_cents = row["amount_cents"]
-            charged_at = row["charged_at"]
+        charge_id = row["charge_id"]
+        amount_cents = row["amount_cents"]
+        status = row["status"]
+        charged_at = row["charged_at"]
 
     result = {
         "business_tx_id": envelope.business_tx_id,
         "charge_id": charge_id,
         "amount_cents": amount_cents,
-        "status": "CHARGED",
+        "status": status,
         "charged_at": charged_at,
     }
     result_bytes = json.dumps(result, sort_keys=True).encode()

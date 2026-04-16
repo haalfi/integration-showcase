@@ -2,12 +2,9 @@
 
 Run with: pytest -m integration  (after docker compose up -d)
 
-Env vars required:
-    STORE_URL       Azurite connection string.  Use the shorthand:
-                      UseDevelopmentStorage=true
-                    (connects to devstoreaccount1 on 127.0.0.1:10000).
-    STORE_CONTAINER Azure Blob container name (must exist in Azurite).
-                    Create it once with: hatch run python tmp/create_container.py
+No manual setup required: the session fixture in conftest.py automatically
+creates the Azurite container and sets STORE_URL / STORE_CONTAINER defaults.
+The fixture skips the session with a clear message if Azurite is unreachable.
 """
 
 from __future__ import annotations
