@@ -24,6 +24,7 @@ from temporalio import activity
 
 from integration_showcase.shared import blob, db
 from integration_showcase.shared.envelope import BlobRef, Envelope
+from integration_showcase.shared.otel import instrument_activity
 
 
 class InsufficientFundsError(Exception):
@@ -57,6 +58,7 @@ def _db_path() -> str:
 
 
 @activity.defn(name="charge_payment")
+@instrument_activity
 def charge_payment(envelope: Envelope) -> BlobRef:
     """Charge payment. Idempotent per ``envelope.idempotency_key``.
 

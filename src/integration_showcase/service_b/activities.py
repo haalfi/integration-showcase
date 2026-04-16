@@ -23,6 +23,7 @@ from temporalio import activity
 
 from integration_showcase.shared import blob, db
 from integration_showcase.shared.envelope import BlobRef, Envelope
+from integration_showcase.shared.otel import instrument_activity
 
 _DB_PATH_ENV = "SERVICE_B_DB_PATH"
 _DEFAULT_DB_PATH = "./tmp/service_b.db"
@@ -48,6 +49,7 @@ def _db_path() -> str:
 
 
 @activity.defn(name="reserve_inventory")
+@instrument_activity
 def reserve_inventory(envelope: Envelope) -> BlobRef:
     """Reserve inventory for the order. Idempotent per ``envelope.idempotency_key``.
 
@@ -97,6 +99,7 @@ def reserve_inventory(envelope: Envelope) -> BlobRef:
 
 
 @activity.defn(name="compensate_reserve_inventory")
+@instrument_activity
 def compensate_reserve_inventory(envelope: Envelope) -> BlobRef:
     """Release the inventory reservation for ``envelope.business_tx_id``.
 

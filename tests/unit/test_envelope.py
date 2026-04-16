@@ -91,6 +91,11 @@ class TestEnvelopeAdvance:
         next_env = env.advance("reserve-inventory", _blob_ref())
         assert next_env.traceparent == "00-trace-span-01"
 
+    def test_tracestate_preserved(self) -> None:
+        env = _envelope(tracestate="vendor=opaque")
+        next_env = env.advance("reserve-inventory", _blob_ref())
+        assert next_env.tracestate == "vendor=opaque"
+
 
 class TestEnvelopeValidation:
     def test_empty_idempotency_key_raises(self) -> None:
@@ -104,6 +109,10 @@ class TestEnvelopeValidation:
     def test_default_baggage_empty(self) -> None:
         env = _envelope()
         assert env.baggage == {}
+
+    def test_default_tracestate_empty(self) -> None:
+        env = _envelope()
+        assert env.tracestate == ""
 
     def test_default_parent_step_id_none(self) -> None:
         env = _envelope()

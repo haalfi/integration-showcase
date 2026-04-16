@@ -40,6 +40,7 @@ class Envelope(BaseModel):
     step_id: str
     payload_ref: BlobRef
     traceparent: str
+    tracestate: str = ""
     baggage: dict[str, str] = {}
     schema_version: str = "1.0"
     content_type: str = "application/json"
