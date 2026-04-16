@@ -342,6 +342,9 @@ im Tracing-Backend rekonstruieren.
 
 ### Nervensystem (OpenTelemetry)
 
-- OneUptime – [_Instrument Temporal.io workflows with OpenTelemetry_](https://oneuptime.com/blog/post/2026-02-06-instrument-temporal-io-workflows-opentelemetry/view)
-- OneUptime – [_OTel request-scoped correlation IDs_](https://oneuptime.com/blog/post/2026-02-06-otel-request-scoped-correlation-ids/view)
-- OneUptime – [_Distributed tracing context propagation_](https://oneuptime.com/blog/post/2026-02-02-distributed-tracing-context-propagation/view)
+- Temporal Docs – [_Observability: Python SDK_](https://docs.temporal.io/develop/python/observability)
+- Temporal Docs – [_temporalio.contrib.opentelemetry (API-Referenz)_](https://python.temporal.io/temporalio.contrib.opentelemetry.html)
+- OpenTelemetry – [_Baggage_](https://opentelemetry.io/docs/concepts/signals/baggage/)
+- OpenTelemetry – [_Context Propagation_](https://opentelemetry.io/docs/concepts/context-propagation/)
+- W3C – [_Propagation format for distributed context: Baggage_](https://www.w3.org/TR/baggage/)
+- OneUptime – [_Instrument Temporal.io workflows with OpenTelemetry_](https://oneuptime.com/blog/post/2026-02-06-instrument-temporal-io-workflows-opentelemetry/view) _(praktisches Beispiel)_
