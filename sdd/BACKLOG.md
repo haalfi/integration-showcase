@@ -40,8 +40,9 @@ then small-wins, then the substantive code work, then cleanup.
   traceparent}` immediately after `StartWorkflow` -- the showcase is fire-and-forget. The
   route at `src/integration_showcase/service_a/app.py:73` is
   `@app.post("/order", response_model=OrderResponse)` with no `status_code=`, so FastAPI
-  returns HTTP 200. One-line fix: add `status_code=202`. Update any test that asserts on
-  the status (`tests/integration/test_service_a.py` if applicable).
+  returns HTTP 200. One-line fix: add `status_code=202`. The status-code assertion lives
+  in `tests/unit/test_service_a.py:85` (`test_returns_200_with_required_fields`) — rename
+  the test and flip the expected value.
 
 - [ ] **IS-008 -- Workflow-level span attributes**
   Temporal's `TracingInterceptor` creates a `RunWorkflow:OrderWorkflow` span that currently
@@ -54,10 +55,16 @@ then small-wins, then the substantive code work, then cleanup.
 - [ ] **IS-009 -- Payment failure touches blob I/O first**
   `charge_payment` checks `FORCE_PAYMENT_FAILURE` before `blob.download`, so the failed-
   attempt span tree in Jaeger has no `blob.get` child -- inconsistent with concept §5.2 which
-  shows `C->AB: GET inventory-result.json` followed by `C--xT: Error`. Move the check to
-  after `blob.download` + `json.loads` so the error span sits under a completed blob-read
-  span. Small diff; preserves determinism because the downloaded bytes do not alter the
-  control flow under forced failure.
+  shows `C->AB: GET inventory-result.json` followed by `C--xT: Error`. Narrow scope: move
+  only `blob.download` (the bytes are not used in the failure path) above the failure
+  check; keep `json.loads` and the rest after the check so a malformed payload still cannot
+  starve the deterministic decline.
+  Trade-off to acknowledge in the diff: the activity docstring at
+  `service_c/activities.py:62-69` currently claims "the failure check runs before any I/O
+  so a declined charge is a deterministic `InsufficientFundsError` regardless of the state
+  of the blob store". With `blob.download` moved up, a blob-store outage now surfaces
+  before `InsufficientFundsError`. Update the docstring to reflect the new ordering and
+  the demo-trace motivation.
 
 - [ ] **IS-010 -- Blob metadata via remote-store**
   Concept §6 checklist item currently unimplemented. Extend `shared/blob.upload` to forward
@@ -83,17 +90,30 @@ then small-wins, then the substantive code work, then cleanup.
 
 - [ ] **IS-012 -- Retry-then-fail payment path**
   Concept §5.2 sequence shows attempt 1 = `gateway_timeout` (retryable) -> attempt 2 =
-  `insufficient_funds` (non-retryable). Current implementation short-circuits on first
-  attempt. Add `FORCE_PAYMENT_TRANSIENT_FAILS=N` env: first N attempts raise a retryable
+  `insufficient_funds` (non-retryable). The retry policy is wired correctly
+  (`OrderWorkflow._PAYMENT_RETRY` at `workflow/order.py:34-39`: `maximum_attempts=3`, 2s
+  initial interval, `backoff_coefficient=2.0`); the gap is in the forced-failure mode, which
+  raises the non-retryable `InsufficientFundsError` on attempt 1, so Temporal skips retries
+  by policy and the §5.2 retry-then-fail sequence is never exercised. Add
+  `FORCE_PAYMENT_TRANSIENT_FAILS=N` env: first N attempts raise a retryable
   `PaymentGatewayError`; attempt N+1 either succeeds or raises `InsufficientFundsError`
   depending on `FORCE_PAYMENT_FAILURE`. Acceptance: trace shows two failed attempts + one
   terminal attempt with exponential-backoff spacing visible in Jaeger.
 
 - [ ] **BK-003 -- BlobRef field hygiene**
-  Depends on IS-010. After blob metadata lands, decide per field: populate `version_id`
-  from the remote-store write result if the Azure backend exposes it, otherwise drop both
-  `etag` and `version_id` from `BlobRef` and from the concept §3 canonical envelope. Keep
-  `sha256` as the integrity guarantee. Update every envelope construction site accordingly.
+  `BlobRef.etag` and `BlobRef.version_id` are reserved fields that are always empty today,
+  because `Store.write` in `remote-store` returns no write metadata at all -- this is a
+  remote-store API gap, not a backend-vs-backend split (see `shared/envelope.py::BlobRef`
+  docstring). Two paths, in order of dependency:
+  - **Option A (preferred):** wait for an upstream `remote-store` change that surfaces
+    write metadata, then land IS-010 (read-side metadata), then populate `version_id`
+    from the write result for backends that expose it (Azure with versioning enabled).
+    Dependency chain: upstream remote-store change -> IS-010 -> BK-003.
+  - **Option B (fallback):** drop both `etag` and `version_id` from `BlobRef` and from
+    the concept §3 canonical envelope. Keep `sha256` as the integrity guarantee. Update
+    every envelope construction site accordingly. No upstream dependency.
+
+  Decide once IS-010 is closed and the upstream picture is clearer.
 
 - [ ] **BK-004 -- Business attrs on `store.*` spans**
   `otel_observe`-wrapped blob spans (`store.write`, `store.read_bytes`) currently lack the
