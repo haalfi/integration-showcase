@@ -20,8 +20,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from temporalio import activity
-from temporalio.client import Client
+from temporalio.client import WorkflowFailureError
 from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
@@ -54,7 +55,9 @@ def _start_envelope(tx: str = "routing-test-001") -> Envelope:
 
 
 # ---------------------------------------------------------------------------
-# Poison stubs — registered on TASK_QUEUE, fail immediately
+# Poison stubs — registered on TASK_QUEUE, fail immediately.
+# INVARIANT: these four and the _stub_* four share activity names on purpose;
+# they must never be registered on the same Worker.
 # ---------------------------------------------------------------------------
 
 
@@ -103,17 +106,8 @@ def _stub_compensate(env: Envelope) -> BlobRef:  # noqa: ARG001
     return _STUB_REF
 
 
-async def _make_client(env: WorkflowEnvironment) -> Client:
-    """Return a pydantic-aware client against the test server."""
-    return await Client.connect(
-        env.client.service_client.config.target_host,
-        data_converter=pydantic_data_converter,
-        namespace=env.client.namespace,
-    )
-
-
 # ---------------------------------------------------------------------------
-# Behavioral test
+# Behavioral tests
 # ---------------------------------------------------------------------------
 
 
@@ -128,8 +122,10 @@ async def test_happy_path_routes_each_activity_to_its_service_queue() -> None:
     After the fix, activities reach the real stubs and the workflow returns the
     business_tx_id.
     """
-    async with await WorkflowEnvironment.start_time_skipping() as env:
-        client = await _make_client(env)
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter,
+    ) as env:
+        client = env.client
         with ThreadPoolExecutor() as executor:
             async with (
                 Worker(
@@ -170,3 +166,71 @@ async def test_happy_path_routes_each_activity_to_its_service_queue() -> None:
                     task_queue=TASK_QUEUE,
                 )
     assert result == "routing-test-001"
+
+
+@pytest.mark.integration
+async def test_unhappy_path_compensation_routes_to_task_queue_b() -> None:
+    """Payment failure must trigger compensate_reserve_inventory on TASK_QUEUE_B.
+
+    If compensation were misrouted to TASK_QUEUE, the poison stub would fail it
+    and exhaust the retry budget without compensation being recorded.  The
+    counter closed over by the tracking stub proves the correct queue was used.
+    """
+    compensate_calls: list[bool] = []
+
+    @activity.defn(name="charge_payment")
+    def _stub_charge_fail(_env: Envelope) -> BlobRef:
+        raise ApplicationError(
+            "insufficient funds", type="InsufficientFundsError", non_retryable=True
+        )
+
+    @activity.defn(name="compensate_reserve_inventory")
+    def _stub_compensate_tracking(_env: Envelope) -> BlobRef:
+        compensate_calls.append(True)
+        return _STUB_REF
+
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter,
+    ) as env:
+        client = env.client
+        with ThreadPoolExecutor() as executor:
+            async with (
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE,
+                    workflows=[OrderWorkflow],
+                    activities=[
+                        _poison_reserve,
+                        _poison_charge,
+                        _poison_dispatch,
+                        _poison_compensate,
+                    ],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_B,
+                    activities=[_stub_reserve, _stub_compensate_tracking],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_C,
+                    activities=[_stub_charge_fail],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_D,
+                    activities=[_stub_dispatch],
+                    activity_executor=executor,
+                ),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await client.execute_workflow(
+                        OrderWorkflow.run,
+                        _start_envelope(tx="routing-test-002"),
+                        id="test-routing-unhappy-001",
+                        task_queue=TASK_QUEUE,
+                    )
+    assert compensate_calls, "compensate_reserve_inventory must be invoked on TASK_QUEUE_B"
