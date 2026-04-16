@@ -6,6 +6,7 @@ no Docker, no network required.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from collections.abc import AsyncGenerator
@@ -19,6 +20,8 @@ from remote_store.backends import MemoryBackend
 
 import integration_showcase.service_a.app as app_module
 import integration_showcase.shared.blob as blob_module
+from integration_showcase.shared.constants import TASK_QUEUE
+from integration_showcase.shared.envelope import Envelope
 
 
 @pytest.fixture()
@@ -91,20 +94,42 @@ class TestCreateOrder:
         assert payload["items"] == _VALID_ORDER["items"]
         assert payload["customer_id"] == _VALID_ORDER["customer_id"]
 
-    async def test_temporal_start_workflow_called_with_matching_id(
-        self, client: httpx.AsyncClient, temporal_mock: AsyncMock
+    async def test_start_workflow_envelope_and_task_queue(
+        self, client: httpx.AsyncClient, temporal_mock: AsyncMock, memory_store: Store
     ) -> None:
+        """Verify the full start_workflow call: workflow name, envelope invariants, task queue."""
         response = await client.post("/order", json=_VALID_ORDER)
-        workflow_id = response.json()["workflow_id"]
+        body = response.json()
+        business_tx_id = body["business_tx_id"]
+        workflow_id = body["workflow_id"]
 
         temporal_mock.start_workflow.assert_called_once()
-        _args, kwargs = temporal_mock.start_workflow.call_args
+        args, kwargs = temporal_mock.start_workflow.call_args
+
+        # Workflow name (typo here is a silent Temporal runtime error)
+        assert args[0] == "OrderWorkflow"
+
+        # Envelope invariants (DESIGN.md §Envelope invariants)
+        envelope: Envelope = args[1]
+        assert isinstance(envelope, Envelope)
+        assert envelope.business_tx_id == business_tx_id
+        assert envelope.workflow_id == workflow_id
+        assert envelope.step_id == "start"
+        assert envelope.idempotency_key == f"{business_tx_id}:start:1.0"
+        assert envelope.payload_ref.blob_url == f"workflows/{business_tx_id}/input.json"
+        expected_payload = json.dumps(
+            {"items": _VALID_ORDER["items"], "customer_id": _VALID_ORDER["customer_id"]}
+        ).encode()
+        assert envelope.payload_ref.sha256 == hashlib.sha256(expected_payload).hexdigest()
+
+        # Temporal routing — must match the worker's task queue (shared/constants.py)
         assert kwargs["id"] == workflow_id
+        assert kwargs["task_queue"] == TASK_QUEUE
 
     async def test_uninitialized_temporal_client_returns_500(
         self,
-        memory_store: Store,
-        monkeypatch: pytest.MonkeyPatch,  # noqa: ARG001
+        memory_store: Store,  # noqa: ARG001
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(app_module, "_temporal_client", None)
         # raise_app_exceptions=False lets the ASGI error middleware return 500
