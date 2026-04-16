@@ -9,13 +9,23 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from opentelemetry import baggage, trace
+from opentelemetry.context import attach, detach
 from pydantic import BaseModel
 from temporalio.client import Client
+from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
 
 from integration_showcase.shared import blob
 from integration_showcase.shared.constants import TASK_QUEUE
 from integration_showcase.shared.envelope import BlobRef, Envelope
+from integration_showcase.shared.otel import (
+    inject_carrier_into_envelope,
+    set_envelope_span_attrs,
+    setup_tracing,
+)
+
+_tracer = trace.get_tracer(__name__)
 
 # Module-level client instance; set by lifespan at startup, overridable in tests.
 _temporal_client: Client | None = None
@@ -23,14 +33,19 @@ _temporal_client: Client | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Connect Temporal client at startup; drop reference on shutdown.
+    """Bootstrap tracing and connect the Temporal client at startup.
 
     ``temporalio.client.Client`` has no ``close`` method -- the underlying
     connection is cleaned up by GC when the reference is dropped.
     """
     global _temporal_client
+    setup_tracing("service-a")
     address = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
-    _temporal_client = await Client.connect(address, data_converter=pydantic_data_converter)
+    _temporal_client = await Client.connect(
+        address,
+        data_converter=pydantic_data_converter,
+        interceptors=[TracingInterceptor()],
+    )
     try:
         yield
     finally:
@@ -66,28 +81,39 @@ async def create_order(request: OrderRequest) -> OrderResponse:
     business_tx_id = str(uuid.uuid4())
     workflow_id = f"order-{business_tx_id}"
 
-    # Serialize payload and upload to blob store
-    payload = json.dumps({"items": request.items, "customer_id": request.customer_id}).encode()
-    blob_path = f"workflows/{business_tx_id}/input.json"
-    payload_ref: BlobRef = blob.upload(payload, blob_path)
+    # Seed baggage so the business_tx_id rides the whole trace (DESIGN.md
+    # §OTel span attributes; unified baggage per Q3).
+    token = attach(baggage.set_baggage("business_tx_id", business_tx_id))
+    try:
+        with _tracer.start_as_current_span("http.ingress POST /order") as span:
+            payload = json.dumps(
+                {"items": request.items, "customer_id": request.customer_id}
+            ).encode()
+            blob_path = f"workflows/{business_tx_id}/input.json"
+            payload_ref: BlobRef = blob.upload(payload, blob_path)
 
-    # Build initial envelope (run_id and traceparent filled in by IS-005 OTel integration)
-    envelope = Envelope(
-        workflow_id=workflow_id,
-        run_id="",  # Temporal assigns the run_id; IS-005 propagates via activity.info()
-        business_tx_id=business_tx_id,
-        step_id="start",
-        payload_ref=payload_ref,
-        traceparent="",  # IS-005: W3C trace context propagation
-        idempotency_key=Envelope.make_idempotency_key(business_tx_id, "start"),
-    )
+            envelope = Envelope(
+                workflow_id=workflow_id,
+                run_id="",  # Temporal assigns the run_id; activities backfill via activity.info()
+                business_tx_id=business_tx_id,
+                step_id="start",
+                payload_ref=payload_ref,
+                traceparent="",
+                idempotency_key=Envelope.make_idempotency_key(business_tx_id, "start"),
+            )
+            set_envelope_span_attrs(span, envelope)
 
-    # Fire-and-forget: start the workflow without awaiting completion
-    await _temporal_client.start_workflow(
-        "OrderWorkflow",
-        envelope,
-        id=workflow_id,
-        task_queue=TASK_QUEUE,
-    )
+            # Serialize current trace context into the envelope so non-Temporal
+            # consumers (audit, correlation) see it alongside the Temporal header.
+            envelope = inject_carrier_into_envelope(envelope)
+
+            await _temporal_client.start_workflow(
+                "OrderWorkflow",
+                envelope,
+                id=workflow_id,
+                task_queue=TASK_QUEUE,
+            )
+    finally:
+        detach(token)
 
     return OrderResponse(business_tx_id=business_tx_id, workflow_id=workflow_id)

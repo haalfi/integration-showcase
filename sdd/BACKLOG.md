@@ -41,12 +41,14 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
   Implement `scenarios/run_happy.py` and `run_unhappy.py`: POST to Service A, wait for
   workflow completion, print Jaeger and Temporal UI links.
 
-- [ ] **IS-005 -- OTel instrumentation**
-  Add span attributes (`business_tx_id`, `workflow_id`, `run_id`, `step_id`,
-  `payload_ref_sha256`) to every activity and the workflow itself.
-  Propagate W3C `traceparent` + `baggage` via Envelope fields at every service boundary.
-  **Prerequisite:** update `pyproject.toml` dependency to `remote-store[azure,otel]` before
-  using `remote_store.ext.otel` (`otel_hooks` / `otel_observe`) for store-level tracing spans.
+- [ ] **IS-005b -- Log correlation (trace_id / span_id / business_tx_id in logs)**
+  Split from IS-005. Configure structured logging so every log record carries the
+  current `trace_id`, `span_id`, and `business_tx_id` (from OTel baggage). Approach:
+  a `logging.Filter` that reads `trace.get_current_span().get_span_context()` and
+  `baggage.get_baggage("business_tx_id")` and injects them as `LogRecord` extras;
+  a JSON formatter emits them as top-level fields for Loki/ES-friendly querying.
+  Validate end-to-end: Jaeger trace_id should match what appears in the service
+  stdout JSON logs.
 
 ---
 

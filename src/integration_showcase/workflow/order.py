@@ -41,6 +41,11 @@ class OrderWorkflow:
     @workflow.run
     async def run(self, envelope: Envelope) -> str:
         """Execute the saga. Returns business_tx_id on success."""
+        # Service A sends run_id="" (Temporal assigns it here). Backfill so every
+        # activity span (IS-005) sees a stable run_id without needing activity.info().
+        if not envelope.run_id:
+            envelope = envelope.model_copy(update={"run_id": workflow.info().run_id})
+
         # Step 1: Reserve inventory
         inventory_ref: BlobRef = await workflow.execute_activity(
             "reserve_inventory",

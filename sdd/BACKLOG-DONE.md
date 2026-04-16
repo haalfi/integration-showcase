@@ -1,5 +1,19 @@
 # Completed Backlog Items
 
+- [x] **IS-005 -- OTel instrumentation**
+  `shared/otel.py`: `setup_tracing(service)` installs TracerProvider + OTLP exporter
+  + W3C TraceContext/Baggage composite propagator; `set_envelope_span_attrs` tags a
+  span with the six required business attrs (`business_tx_id`, `workflow_id`,
+  `run_id`, `step_id`, `payload_ref_sha256`, `schema_version`); `inject_carrier_into_envelope` /
+  `extract_context_from_envelope` serialize the W3C context into `Envelope.traceparent` /
+  `tracestate` + unified `baggage` dict; `@instrument_activity` decorator backfills
+  `run_id` from `activity.info()` and tags the current `RunActivity:*` span. Each worker
+  (workflow/B/C/D) bootstraps tracing and installs Temporal's `TracingInterceptor`.
+  Service A wraps `POST /order` in an `http.ingress` span and injects the carrier
+  before `start_workflow`. Blob store wrapped with `remote_store.ext.otel.otel_observe`.
+  15 new unit tests; full suite 74 tests @ 95.56% coverage. Log correlation split
+  into IS-005b.
+
 - [x] **BK-002 -- GitHub Actions CI quality gate**
   `.github/workflows/ci.yml`: runs on push/PR to `main`. Jobs: `changes` (path
   filter), `lint` (ruff check + format-check), `typecheck` (mypy), `test`

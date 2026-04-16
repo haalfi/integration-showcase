@@ -17,6 +17,7 @@ from collections.abc import Callable
 
 from remote_store import Store
 from remote_store.backends import AzureBackend
+from remote_store.ext.otel import otel_observe
 
 from integration_showcase.shared.envelope import BlobRef
 
@@ -28,11 +29,16 @@ def _make_store() -> Store:
                       ``DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;...``
                       or the shorthand ``UseDevelopmentStorage=true``.
     STORE_CONTAINER — Azure Blob container name.
+
+    Wrapped in :func:`otel_observe` so every Store I/O op emits a
+    ``store.<operation>`` span as a child of the current activity span
+    (IS-005). When no :class:`TracerProvider` is configured, the OTel
+    calls are zero-cost no-ops.
     """
     connection_string = os.environ["STORE_URL"]
     container = os.environ["STORE_CONTAINER"]
     backend = AzureBackend(container=container, connection_string=connection_string)
-    return Store(backend)
+    return otel_observe(Store(backend))
 
 
 # Module-level factory — replace in tests via monkeypatch.setattr to inject a

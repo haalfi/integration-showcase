@@ -21,6 +21,7 @@ from temporalio import activity
 
 from integration_showcase.shared import blob, db
 from integration_showcase.shared.envelope import BlobRef, Envelope
+from integration_showcase.shared.otel import instrument_activity
 
 _DB_PATH_ENV = "SERVICE_D_DB_PATH"
 _DEFAULT_DB_PATH = "./tmp/service_d.db"
@@ -45,6 +46,7 @@ def _db_path() -> str:
 
 
 @activity.defn(name="dispatch_shipment")
+@instrument_activity
 def dispatch_shipment(envelope: Envelope) -> BlobRef:
     """Dispatch shipment. Idempotent per ``envelope.idempotency_key``."""
     input_bytes = blob.download(envelope.payload_ref)

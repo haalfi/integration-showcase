@@ -15,6 +15,9 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from opentelemetry.context import attach, detach
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import get_current_span
 from remote_store import Store
 from remote_store.backends import MemoryBackend
 
@@ -22,6 +25,7 @@ import integration_showcase.service_a.app as app_module
 import integration_showcase.shared.blob as blob_module
 from integration_showcase.shared.constants import TASK_QUEUE
 from integration_showcase.shared.envelope import Envelope
+from integration_showcase.shared.otel import extract_context_from_envelope
 
 
 @pytest.fixture()
@@ -125,6 +129,52 @@ class TestCreateOrder:
         # Temporal routing — must match the worker's task queue (shared/constants.py)
         assert kwargs["id"] == workflow_id
         assert kwargs["task_queue"] == TASK_QUEUE
+
+    async def test_ingress_span_has_six_business_attrs(
+        self,
+        client: httpx.AsyncClient,
+        spans: InMemorySpanExporter,
+    ) -> None:
+        response = await client.post("/order", json=_VALID_ORDER)
+        body = response.json()
+
+        ingress_spans = [
+            s for s in spans.get_finished_spans() if s.name == "http.ingress POST /order"
+        ]
+        assert len(ingress_spans) == 1
+        attrs = ingress_spans[0].attributes or {}
+        assert attrs["business_tx_id"] == body["business_tx_id"]
+        assert attrs["workflow_id"] == body["workflow_id"]
+        assert attrs["step_id"] == "start"
+        assert attrs["schema_version"] == "1.0"
+        assert "payload_ref_sha256" in attrs
+
+    async def test_envelope_traceparent_matches_ingress_trace(
+        self,
+        client: httpx.AsyncClient,
+        temporal_mock: AsyncMock,
+        spans: InMemorySpanExporter,
+    ) -> None:
+        await client.post("/order", json=_VALID_ORDER)
+
+        ingress_spans = [
+            s for s in spans.get_finished_spans() if s.name == "http.ingress POST /order"
+        ]
+        assert len(ingress_spans) == 1
+        expected_trace_id = ingress_spans[0].get_span_context().trace_id
+
+        envelope: Envelope = temporal_mock.start_workflow.call_args[0][1]
+        assert envelope.traceparent != ""
+        assert envelope.baggage.get("business_tx_id") == envelope.business_tx_id
+
+        # Extract the carrier and verify trace_id continuity across the boundary.
+        ctx = extract_context_from_envelope(envelope)
+        token = attach(ctx)
+        try:
+            extracted_trace_id = get_current_span().get_span_context().trace_id
+        finally:
+            detach(token)
+        assert extracted_trace_id == expected_trace_id
 
     async def test_uninitialized_temporal_client_returns_500(
         self,

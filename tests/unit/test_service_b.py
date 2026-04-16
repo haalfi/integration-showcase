@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from remote_store import Store
 from remote_store.backends import MemoryBackend
 
@@ -230,3 +232,26 @@ class TestCompensateReserveInventory:
             (env.business_tx_id,),
         ).fetchone()[0]
         assert count == 1
+
+
+class TestActivitySpanAttributes:
+    """instrument_activity must tag the surrounding span with business attrs."""
+
+    def test_reserve_inventory_tags_current_span(
+        self,
+        memory_store: Store,
+        db_conn: sqlite3.Connection,  # noqa: ARG002
+        spans: InMemorySpanExporter,
+    ) -> None:
+        env = _make_envelope(["w"])
+        tracer = trace.get_tracer(__name__)
+        with tracer.start_as_current_span("RunActivity:reserve_inventory"):
+            reserve_inventory(env)
+
+        (recorded,) = [
+            s for s in spans.get_finished_spans() if s.name == "RunActivity:reserve_inventory"
+        ]
+        attrs = recorded.attributes or {}
+        assert attrs["business_tx_id"] == env.business_tx_id
+        assert attrs["step_id"] == env.step_id
+        assert attrs["payload_ref_sha256"] == env.payload_ref.sha256
