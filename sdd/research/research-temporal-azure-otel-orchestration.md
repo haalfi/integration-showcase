@@ -1,4 +1,3 @@
----
 # Konzept: Temporal + Azure Blob + OpenTelemetry
 
 > **Scope:** Protokoll und Konzept für verteilte Prozess-Orchestrierung über
