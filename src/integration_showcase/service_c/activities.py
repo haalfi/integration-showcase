@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import uuid
 from datetime import UTC, datetime
 
@@ -44,15 +43,12 @@ CREATE TABLE IF NOT EXISTS payments (
 """
 
 
-def _get_conn() -> sqlite3.Connection:
+def _db_path() -> str:
     path = os.environ.get(_DB_PATH_ENV, _DEFAULT_DB_PATH)
     parent = os.path.dirname(path)
     if parent and path != ":memory:":
         os.makedirs(parent, exist_ok=True)
-    conn = db.connect(path)
-    conn.execute(_DDL)
-    conn.commit()
-    return conn
+    return path
 
 
 @activity.defn(name="charge_payment")
@@ -73,34 +69,34 @@ async def charge_payment(envelope: Envelope) -> BlobRef:
             f"Payment declined for business_tx_id={envelope.business_tx_id}"
         )
 
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT charge_id, amount_cents, status, charged_at"
-        " FROM payments WHERE idempotency_key = ?",
-        (envelope.idempotency_key,),
-    ).fetchone()
+    with db.connect(_db_path()) as conn:
+        conn.execute(_DDL)
+        row = conn.execute(
+            "SELECT charge_id, amount_cents, status, charged_at"
+            " FROM payments WHERE idempotency_key = ?",
+            (envelope.idempotency_key,),
+        ).fetchone()
 
-    if row is None:
-        charge_id = f"ch-{uuid.uuid4()}"
-        charged_at = datetime.now(UTC).isoformat()
-        conn.execute(
-            "INSERT INTO payments"
-            " (idempotency_key, business_tx_id, charge_id, amount_cents, status, charged_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                envelope.idempotency_key,
-                envelope.business_tx_id,
-                charge_id,
-                amount_cents,
-                "CHARGED",
-                charged_at,
-            ),
-        )
-        conn.commit()
-    else:
-        charge_id = row["charge_id"]
-        amount_cents = row["amount_cents"]
-        charged_at = row["charged_at"]
+        if row is None:
+            charge_id = f"ch-{uuid.uuid4()}"
+            charged_at = datetime.now(UTC).isoformat()
+            conn.execute(
+                "INSERT INTO payments"
+                " (idempotency_key, business_tx_id, charge_id, amount_cents, status, charged_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    envelope.idempotency_key,
+                    envelope.business_tx_id,
+                    charge_id,
+                    amount_cents,
+                    "CHARGED",
+                    charged_at,
+                ),
+            )
+        else:
+            charge_id = row["charge_id"]
+            amount_cents = row["amount_cents"]
+            charged_at = row["charged_at"]
 
     result = {
         "business_tx_id": envelope.business_tx_id,
@@ -110,5 +106,5 @@ async def charge_payment(envelope: Envelope) -> BlobRef:
         "charged_at": charged_at,
     }
     result_bytes = json.dumps(result, sort_keys=True).encode()
-    path = f"workflows/{envelope.business_tx_id}/charge-payment.json"
-    return blob.upload(result_bytes, path)
+    blob_path = f"workflows/{envelope.business_tx_id}/charge-payment.json"
+    return blob.upload(result_bytes, blob_path)

@@ -1,7 +1,9 @@
 """Unit tests for Service B activities (inventory + compensation).
 
-Uses MemoryBackend for blob I/O and a shared :memory: SQLite connection
-for state -- no Docker, no filesystem, no network.
+Uses MemoryBackend for blob I/O and a ``tmp_path``-backed SQLite file for
+state. Each activity call opens and closes its own real connection
+(matching production and the multi-worker reality), while a separate
+viewer connection lets the test inspect persisted state.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ import json
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 from remote_store import Store
@@ -22,7 +25,7 @@ from integration_showcase.service_b.activities import (
     reserve_inventory,
 )
 from integration_showcase.shared.blob import upload
-from integration_showcase.shared.envelope import Envelope
+from integration_showcase.shared.envelope import BlobRef, Envelope
 
 
 @pytest.fixture()
@@ -39,15 +42,22 @@ def memory_store(monkeypatch: pytest.MonkeyPatch) -> Store:
 
 @pytest.fixture()
 def db_conn(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> Generator[sqlite3.Connection, None, None]:
-    conn = sqlite3.connect(":memory:")
-    monkeypatch.setattr(db_module, "_connect_factory", lambda _path: conn)
-    monkeypatch.setenv("SERVICE_B_DB_PATH", ":memory:")
+    db_file = tmp_path / "service_b.db"
+
+    def _factory(_path: str) -> sqlite3.Connection:
+        return sqlite3.connect(str(db_file))
+
+    monkeypatch.setattr(db_module, "_connect_factory", _factory)
+    monkeypatch.setenv("SERVICE_B_DB_PATH", str(db_file))
+
+    viewer = sqlite3.connect(str(db_file))
+    viewer.row_factory = sqlite3.Row
     try:
-        yield conn
+        yield viewer
     finally:
-        conn.close()
+        viewer.close()
 
 
 def _make_envelope(items: list[str], tx: str = "tx-001") -> Envelope:
@@ -62,6 +72,18 @@ def _make_envelope(items: list[str], tx: str = "tx-001") -> Envelope:
         traceparent="",
         idempotency_key=Envelope.make_idempotency_key(tx, "start"),
     )
+
+
+def _compensation_envelope(env: Envelope, reserve_ref: BlobRef) -> Envelope:
+    """Envelope as produced by ``OrderWorkflow`` before invoking compensation.
+
+    The workflow advances to ``step_id="compensate.reserve-inventory"``
+    (DESIGN.md §Compensation rules), which yields the canonical
+    compensation ``idempotency_key``.
+    """
+    # Step promotion: start -> reserve-inventory -> compensate.reserve-inventory.
+    inventory_env = env.advance("reserve-inventory", reserve_ref)
+    return inventory_env.advance("compensate.reserve-inventory", reserve_ref)
 
 
 class TestReserveInventory:
@@ -119,9 +141,11 @@ class TestCompensateReserveInventory:
     ) -> None:
         env = _make_envelope(["w"])
         reserve_ref = await reserve_inventory(env)
-        # Compensation receives the envelope advanced to "reserve-inventory"
-        # (mirrors workflow/order.py: it passes inventory_envelope).
-        comp_env = env.advance("reserve-inventory", reserve_ref)
+        comp_env = _compensation_envelope(env, reserve_ref)
+        # Sanity: the compensation envelope carries the canonical spec key.
+        assert comp_env.idempotency_key == (
+            f"{env.business_tx_id}:compensate.reserve-inventory:1.0"
+        )
 
         ref = await compensate_reserve_inventory(comp_env)
 
@@ -141,7 +165,7 @@ class TestCompensateReserveInventory:
     ) -> None:
         env = _make_envelope(["w"])
         reserve_ref = await reserve_inventory(env)
-        comp_env = env.advance("reserve-inventory", reserve_ref)
+        comp_env = _compensation_envelope(env, reserve_ref)
 
         first = await compensate_reserve_inventory(comp_env)
         first_released = db_conn.execute(
@@ -158,23 +182,41 @@ class TestCompensateReserveInventory:
         assert first_released == second_released
         assert first == second
 
+        # Regression guard: a second compensation must NOT insert a second
+        # row for the same business_tx_id (would indicate an UPDATE-predicate
+        # or transaction-isolation bug between separate worker connections).
+        count = db_conn.execute(
+            "SELECT COUNT(*) FROM inventory_reservations WHERE business_tx_id = ?",
+            (env.business_tx_id,),
+        ).fetchone()[0]
+        assert count == 1
+
     async def test_orphan_compensation_writes_tombstone_row(
         self, memory_store: Store, db_conn: sqlite3.Connection
     ) -> None:
         # No prior reserve_inventory call -- compensation runs orphaned.
         env = _make_envelope(["w"])
-        comp_env = env.advance("reserve-inventory", env.payload_ref)
+        comp_env = _compensation_envelope(env, env.payload_ref)
 
         ref = await compensate_reserve_inventory(comp_env)
 
         row = db_conn.execute(
-            "SELECT reservation_id, released_at FROM inventory_reservations"
-            " WHERE business_tx_id = ?",
+            "SELECT idempotency_key, reservation_id, released_at"
+            " FROM inventory_reservations WHERE business_tx_id = ?",
             (env.business_tx_id,),
         ).fetchone()
         assert row["reservation_id"] == "orphan"
         assert row["released_at"] is not None
+        # Tombstone PK uses the canonical compensation idempotency_key
+        # (DESIGN.md §Envelope invariants #4).
+        assert row["idempotency_key"] == comp_env.idempotency_key
 
-        # Retry of orphan compensation must return the same BlobRef.
+        # Retry of orphan compensation must return the same BlobRef
+        # and must not insert a second row.
         again = await compensate_reserve_inventory(comp_env)
         assert ref == again
+        count = db_conn.execute(
+            "SELECT COUNT(*) FROM inventory_reservations WHERE business_tx_id = ?",
+            (env.business_tx_id,),
+        ).fetchone()[0]
+        assert count == 1

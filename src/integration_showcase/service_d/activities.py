@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import uuid
 from datetime import UTC, datetime
 
@@ -32,15 +31,12 @@ CREATE TABLE IF NOT EXISTS shipments (
 """
 
 
-def _get_conn() -> sqlite3.Connection:
+def _db_path() -> str:
     path = os.environ.get(_DB_PATH_ENV, _DEFAULT_DB_PATH)
     parent = os.path.dirname(path)
     if parent and path != ":memory:":
         os.makedirs(parent, exist_ok=True)
-    conn = db.connect(path)
-    conn.execute(_DDL)
-    conn.commit()
-    return conn
+    return path
 
 
 @activity.defn(name="dispatch_shipment")
@@ -50,32 +46,32 @@ async def dispatch_shipment(envelope: Envelope) -> BlobRef:
     input_data = json.loads(input_bytes)
     charge_id = input_data["charge_id"]
 
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT shipment_id, charge_id, dispatched_at FROM shipments WHERE idempotency_key = ?",
-        (envelope.idempotency_key,),
-    ).fetchone()
+    with db.connect(_db_path()) as conn:
+        conn.execute(_DDL)
+        row = conn.execute(
+            "SELECT shipment_id, charge_id, dispatched_at FROM shipments WHERE idempotency_key = ?",
+            (envelope.idempotency_key,),
+        ).fetchone()
 
-    if row is None:
-        shipment_id = f"shp-{uuid.uuid4()}"
-        dispatched_at = datetime.now(UTC).isoformat()
-        conn.execute(
-            "INSERT INTO shipments"
-            " (idempotency_key, business_tx_id, shipment_id, charge_id, dispatched_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (
-                envelope.idempotency_key,
-                envelope.business_tx_id,
-                shipment_id,
-                charge_id,
-                dispatched_at,
-            ),
-        )
-        conn.commit()
-    else:
-        shipment_id = row["shipment_id"]
-        charge_id = row["charge_id"]
-        dispatched_at = row["dispatched_at"]
+        if row is None:
+            shipment_id = f"shp-{uuid.uuid4()}"
+            dispatched_at = datetime.now(UTC).isoformat()
+            conn.execute(
+                "INSERT INTO shipments"
+                " (idempotency_key, business_tx_id, shipment_id, charge_id, dispatched_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    envelope.idempotency_key,
+                    envelope.business_tx_id,
+                    shipment_id,
+                    charge_id,
+                    dispatched_at,
+                ),
+            )
+        else:
+            shipment_id = row["shipment_id"]
+            charge_id = row["charge_id"]
+            dispatched_at = row["dispatched_at"]
 
     result = {
         "business_tx_id": envelope.business_tx_id,
@@ -84,5 +80,5 @@ async def dispatch_shipment(envelope: Envelope) -> BlobRef:
         "dispatched_at": dispatched_at,
     }
     result_bytes = json.dumps(result, sort_keys=True).encode()
-    path = f"workflows/{envelope.business_tx_id}/dispatch-shipment.json"
-    return blob.upload(result_bytes, path)
+    blob_path = f"workflows/{envelope.business_tx_id}/dispatch-shipment.json"
+    return blob.upload(result_bytes, blob_path)

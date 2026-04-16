@@ -1,7 +1,9 @@
 """Unit tests for Service D dispatch_shipment activity.
 
 Reads payment-receipt blobs (built directly in the test) and asserts the
-DB row + confirmation blob contents. Uses MemoryBackend + :memory: SQLite.
+DB row + confirmation blob contents. Uses MemoryBackend + a ``tmp_path``-
+backed SQLite file -- each activity call opens and closes its own real
+connection.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ import json
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 from remote_store import Store
@@ -36,15 +39,22 @@ def memory_store(monkeypatch: pytest.MonkeyPatch) -> Store:
 
 @pytest.fixture()
 def db_conn(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> Generator[sqlite3.Connection, None, None]:
-    conn = sqlite3.connect(":memory:")
-    monkeypatch.setattr(db_module, "_connect_factory", lambda _path: conn)
-    monkeypatch.setenv("SERVICE_D_DB_PATH", ":memory:")
+    db_file = tmp_path / "service_d.db"
+
+    def _factory(_path: str) -> sqlite3.Connection:
+        return sqlite3.connect(str(db_file))
+
+    monkeypatch.setattr(db_module, "_connect_factory", _factory)
+    monkeypatch.setenv("SERVICE_D_DB_PATH", str(db_file))
+
+    viewer = sqlite3.connect(str(db_file))
+    viewer.row_factory = sqlite3.Row
     try:
-        yield conn
+        yield viewer
     finally:
-        conn.close()
+        viewer.close()
 
 
 def _make_payment_envelope(charge_id: str = "ch-fixture", tx: str = "tx-001") -> Envelope:

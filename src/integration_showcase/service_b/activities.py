@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import uuid
 from datetime import UTC, datetime
 
@@ -35,15 +34,12 @@ CREATE TABLE IF NOT EXISTS inventory_reservations (
 """
 
 
-def _get_conn() -> sqlite3.Connection:
+def _db_path() -> str:
     path = os.environ.get(_DB_PATH_ENV, _DEFAULT_DB_PATH)
     parent = os.path.dirname(path)
     if parent and path != ":memory:":
         os.makedirs(parent, exist_ok=True)
-    conn = db.connect(path)
-    conn.execute(_DDL)
-    conn.commit()
-    return conn
+    return path
 
 
 @activity.defn(name="reserve_inventory")
@@ -56,34 +52,34 @@ async def reserve_inventory(envelope: Envelope) -> BlobRef:
     input_bytes = blob.download(envelope.payload_ref)
     input_data = json.loads(input_bytes)
 
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT reservation_id, items, reserved_at"
-        " FROM inventory_reservations WHERE idempotency_key = ?",
-        (envelope.idempotency_key,),
-    ).fetchone()
+    with db.connect(_db_path()) as conn:
+        conn.execute(_DDL)
+        row = conn.execute(
+            "SELECT reservation_id, items, reserved_at"
+            " FROM inventory_reservations WHERE idempotency_key = ?",
+            (envelope.idempotency_key,),
+        ).fetchone()
 
-    if row is None:
-        reservation_id = f"res-{uuid.uuid4()}"
-        items = list(input_data["items"])
-        reserved_at = datetime.now(UTC).isoformat()
-        conn.execute(
-            "INSERT INTO inventory_reservations"
-            " (idempotency_key, business_tx_id, reservation_id, items, reserved_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (
-                envelope.idempotency_key,
-                envelope.business_tx_id,
-                reservation_id,
-                json.dumps(items),
-                reserved_at,
-            ),
-        )
-        conn.commit()
-    else:
-        reservation_id = row["reservation_id"]
-        items = json.loads(row["items"])
-        reserved_at = row["reserved_at"]
+        if row is None:
+            reservation_id = f"res-{uuid.uuid4()}"
+            items = list(input_data["items"])
+            reserved_at = datetime.now(UTC).isoformat()
+            conn.execute(
+                "INSERT INTO inventory_reservations"
+                " (idempotency_key, business_tx_id, reservation_id, items, reserved_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    envelope.idempotency_key,
+                    envelope.business_tx_id,
+                    reservation_id,
+                    json.dumps(items),
+                    reserved_at,
+                ),
+            )
+        else:
+            reservation_id = row["reservation_id"]
+            items = json.loads(row["items"])
+            reserved_at = row["reserved_at"]
 
     result = {
         "business_tx_id": envelope.business_tx_id,
@@ -92,62 +88,68 @@ async def reserve_inventory(envelope: Envelope) -> BlobRef:
         "reserved_at": reserved_at,
     }
     result_bytes = json.dumps(result, sort_keys=True).encode()
-    path = f"workflows/{envelope.business_tx_id}/reserve-inventory.json"
-    return blob.upload(result_bytes, path)
+    blob_path = f"workflows/{envelope.business_tx_id}/reserve-inventory.json"
+    return blob.upload(result_bytes, blob_path)
 
 
 @activity.defn(name="compensate_reserve_inventory")
 async def compensate_reserve_inventory(envelope: Envelope) -> BlobRef:
     """Release the inventory reservation for ``envelope.business_tx_id``.
 
-    Lookup is by ``business_tx_id`` (not ``idempotency_key``) because the
-    compensation activity sees a different envelope step than the original
-    reservation. Idempotent: once ``released_at`` is set, subsequent calls
-    preserve it.
+    The workflow advances the envelope to ``step_id="compensate.reserve-inventory"``
+    (DESIGN.md §Compensation rules) before invoking this activity, so
+    ``envelope.idempotency_key`` here is the canonical compensation key
+    ``"{business_tx_id}:compensate.reserve-inventory:{schema_version}"``.
+
+    Lookup of the reservation itself uses ``business_tx_id`` because the
+    original reservation was stored under the forward-step idempotency key
+    (e.g. ``"{business_tx_id}:start:1.0"``). Idempotent: once ``released_at``
+    is set, subsequent calls preserve it.
 
     Edge case: if no prior reservation row exists (orphan compensation),
-    a tombstone row is inserted so retries return the same canonical blob.
+    a tombstone row is inserted under ``envelope.idempotency_key`` so the
+    same-named retry no-ops and returns the same canonical blob.
     """
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT reservation_id, items, reserved_at, released_at"
-        " FROM inventory_reservations WHERE business_tx_id = ?"
-        " ORDER BY reserved_at DESC LIMIT 1",
-        (envelope.business_tx_id,),
-    ).fetchone()
+    with db.connect(_db_path()) as conn:
+        conn.execute(_DDL)
+        row = conn.execute(
+            "SELECT reservation_id, items, reserved_at, released_at"
+            " FROM inventory_reservations WHERE business_tx_id = ?"
+            " ORDER BY reserved_at DESC LIMIT 1",
+            (envelope.business_tx_id,),
+        ).fetchone()
 
-    if row is None:
-        reservation_id = "orphan"
-        items: list[str] = []
-        released_at = datetime.now(UTC).isoformat()
-        conn.execute(
-            "INSERT INTO inventory_reservations"
-            " (idempotency_key, business_tx_id, reservation_id, items, reserved_at, released_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                f"orphan:{envelope.business_tx_id}",
-                envelope.business_tx_id,
-                reservation_id,
-                json.dumps(items),
-                released_at,
-                released_at,
-            ),
-        )
-        conn.commit()
-    elif row["released_at"] is None:
-        reservation_id = row["reservation_id"]
-        items = json.loads(row["items"])
-        released_at = datetime.now(UTC).isoformat()
-        conn.execute(
-            "UPDATE inventory_reservations SET released_at = ?"
-            " WHERE business_tx_id = ? AND released_at IS NULL",
-            (released_at, envelope.business_tx_id),
-        )
-        conn.commit()
-    else:
-        reservation_id = row["reservation_id"]
-        items = json.loads(row["items"])
-        released_at = row["released_at"]
+        if row is None:
+            reservation_id = "orphan"
+            items: list[str] = []
+            released_at = datetime.now(UTC).isoformat()
+            conn.execute(
+                "INSERT INTO inventory_reservations"
+                " (idempotency_key, business_tx_id, reservation_id,"
+                "  items, reserved_at, released_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    envelope.idempotency_key,
+                    envelope.business_tx_id,
+                    reservation_id,
+                    json.dumps(items),
+                    released_at,
+                    released_at,
+                ),
+            )
+        elif row["released_at"] is None:
+            reservation_id = row["reservation_id"]
+            items = json.loads(row["items"])
+            released_at = datetime.now(UTC).isoformat()
+            conn.execute(
+                "UPDATE inventory_reservations SET released_at = ?"
+                " WHERE business_tx_id = ? AND released_at IS NULL",
+                (released_at, envelope.business_tx_id),
+            )
+        else:
+            reservation_id = row["reservation_id"]
+            items = json.loads(row["items"])
+            released_at = row["released_at"]
 
     result = {
         "business_tx_id": envelope.business_tx_id,
@@ -157,5 +159,5 @@ async def compensate_reserve_inventory(envelope: Envelope) -> BlobRef:
         "released_at": released_at,
     }
     result_bytes = json.dumps(result, sort_keys=True).encode()
-    path = f"workflows/{envelope.business_tx_id}/compensate.reserve-inventory.json"
-    return blob.upload(result_bytes, path)
+    blob_path = f"workflows/{envelope.business_tx_id}/compensate.reserve-inventory.json"
+    return blob.upload(result_bytes, blob_path)

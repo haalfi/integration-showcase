@@ -56,9 +56,16 @@ class OrderWorkflow:
                 retry_policy=_PAYMENT_RETRY,
             )
         except Exception:
+            # DESIGN.md §Compensation rules: compensation step_id must be
+            # "compensate.{original_step_id}". Advance the envelope so the
+            # compensation activity gets a canonical idempotency_key
+            # ("{tx}:compensate.reserve-inventory:{schema}").
+            compensate_envelope = inventory_envelope.advance(
+                "compensate.reserve-inventory", inventory_ref
+            )
             await workflow.execute_activity(
                 "compensate_reserve_inventory",
-                inventory_envelope,
+                compensate_envelope,
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=_COMPENSATE_RETRY,
             )
