@@ -49,6 +49,8 @@ typecheck = "mypy src/"
 test = "pytest"
 test-cov = "pytest --cov=integration_showcase --cov-report=term-missing --cov-fail-under=80"
 all = ["lint", "format-check", "test-cov"]
+scenario-happy = "python -m scenarios.run_happy"
+scenario-unhappy = "python -m scenarios.run_unhappy"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/integration_showcase"]

@@ -29,8 +29,15 @@ for full architecture details (German).
 ```bash
 docker compose up -d
 hatch run test
-python scenarios/run_happy.py    # full happy-path -> Jaeger trace
-python scenarios/run_unhappy.py  # payment failure + compensation -> trace
+
+# Happy path: POSTs to Service A, awaits workflow completion,
+# prints Jaeger and Temporal UI deep-links for the specific run.
+hatch run scenario-happy
+
+# Unhappy path: launch Service C with FORCE_PAYMENT_FAILURE=true to
+# trigger the compensation branch, then run the scenario:
+#   FORCE_PAYMENT_FAILURE=true python -m integration_showcase.service_c.worker
+hatch run scenario-unhappy
 ```
 
 | UI | URL |

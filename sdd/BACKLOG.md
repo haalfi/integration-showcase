@@ -37,10 +37,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
   `contextlib.closing`-style guard once it does), and wire it into the
   lifespan's `finally` block. (Raised in PR #6 review.)
 
-- [ ] **IS-006 -- Scenario scripts**
-  Implement `scenarios/run_happy.py` and `run_unhappy.py`: POST to Service A, wait for
-  workflow completion, print Jaeger and Temporal UI links.
-
 - [ ] **IS-005b -- Log correlation (trace_id / span_id / business_tx_id in logs)**
   Split from IS-005. Configure structured logging so every log record carries the
   current `trace_id`, `span_id`, and `business_tx_id` (from OTel baggage). Approach:
