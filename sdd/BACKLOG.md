@@ -44,10 +44,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
   domain action (SQLite write), upload result blob, return new `BlobRef`.
   Includes `compensate_reserve_inventory` (idempotent release).
 
-- [ ] **IS-003 -- Service A: HTTP ingress**
-  FastAPI `POST /order`: serialize request to JSON, upload to blob store via
-  `shared/blob.py`, build initial Envelope, start `OrderWorkflow` via Temporal client.
-
 ---
 
 ## Ideas
