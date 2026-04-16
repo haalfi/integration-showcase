@@ -1,5 +1,13 @@
 # Completed Backlog Items
 
+- [x] **BK-002 -- GitHub Actions CI quality gate**
+  `.github/workflows/ci.yml`: runs on push/PR to `main`. Jobs: `changes` (path
+  filter), `lint` (ruff check + format-check), `typecheck` (mypy), `test`
+  (pytest --cov, fail-under=80), `gate` (aggregator). Uses
+  `actions/checkout@v6`, `actions/setup-python@v6` (3.13),
+  `astral-sh/setup-uv@v8.0.0`. No Docker services needed (unit tests use
+  in-process fakes). Register `gate` as required status check in repo settings.
+
 - [x] **IS-004 -- Activity implementations (B/C/D)**
   Real logic per activity: download payload via `shared/blob.py`, execute the
   local domain action against a private SQLite database (`shared/db.py` helper

@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Detect changed files
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FILES=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")
+          elif [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ] || [ -z "${{ github.event.before }}" ]; then
+            FILES=$(git ls-files)
+          else
+            FILES=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
+          fi
+          CODE_PAT='^(src|tests|scenarios)/|^pyproject\.toml$|^\.github/workflows/ci\.yml$'
+          if echo "$FILES" | grep -qE "$CODE_PAT"; then echo "code=true" >> "$GITHUB_OUTPUT"
+          else echo "code=false" >> "$GITHUB_OUTPUT"; fi
+
+  lint:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v8.0.0
+      - run: uv pip install -e ".[dev]"
+      - run: ruff check src/ tests/ scenarios/
+      - run: ruff format --check src/ tests/ scenarios/
+
+  typecheck:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v8.0.0
+      - run: uv pip install -e ".[dev]"
+      - run: mypy src/
+
+  test:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v8.0.0
+      - run: uv pip install -e ".[dev]"
+      - run: pytest --cov=integration_showcase --cov-report=term-missing --cov-fail-under=80
+
+  gate:
+    needs: [changes, lint, typecheck, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        run: |
+          if [[ "${{ needs.changes.result }}" != "success" ]]; then
+            echo "::error::changes job did not succeed: ${{ needs.changes.result }}"
+            exit 1
+          fi
+          results=(
+            "${{ needs.lint.result }}"
+            "${{ needs.typecheck.result }}"
+            "${{ needs.test.result }}"
+          )
+          for r in "${results[@]}"; do
+            if [[ "$r" != "success" && "$r" != "skipped" ]]; then
+              echo "::error::Job failed with result: $r"
+              exit 1
+            fi
+          done
+          echo "All jobs passed or were skipped."
