@@ -8,6 +8,8 @@ in-memory OTel context and the :class:`Envelope` carrier fields.
 from __future__ import annotations
 
 import functools
+import inspect
+import os
 from typing import TYPE_CHECKING, TypeVar
 
 from opentelemetry import baggage, propagate, trace
@@ -37,12 +39,16 @@ def setup_tracing(service_name: str) -> TracerProvider:
     Idempotent-ish: subsequent calls install a fresh provider but emit the
     usual OTel "Overriding current TracerProvider" warning.
 
-    ``OTEL_EXPORTER_OTLP_ENDPOINT`` (default ``http://localhost:4317``) and
-    ``OTEL_SERVICE_NAME`` are read transparently by the OTLP exporter /
-    :class:`Resource`. The *service_name* argument is the fallback when
-    ``OTEL_SERVICE_NAME`` is unset.
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` (default ``http://localhost:4317``) is
+    read transparently by the OTLP exporter. For the service name, the
+    ``OTEL_SERVICE_NAME`` environment variable wins when set, and the
+    *service_name* argument is the fallback when it is unset. The env is
+    resolved explicitly here because ``Resource.create`` gives caller-
+    supplied attributes priority over environment-detected ones -- passing
+    *service_name* unconditionally would silently override the env.
     """
-    resource = Resource.create({"service.name": service_name})
+    effective_name = os.environ.get("OTEL_SERVICE_NAME") or service_name
+    resource = Resource.create({"service.name": effective_name})
     provider = TracerProvider(resource=resource)
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(provider)
@@ -123,6 +129,12 @@ def extract_context_from_envelope(envelope: Envelope) -> Context:
     return context
 
 
+def _backfill_run_id(envelope: Envelope) -> Envelope:
+    if not envelope.run_id and activity.in_activity():
+        return envelope.model_copy(update={"run_id": activity.info().workflow_run_id})
+    return envelope
+
+
 def instrument_activity(
     fn: Callable[..., _R],
 ) -> Callable[..., _R]:
@@ -135,16 +147,30 @@ def instrument_activity(
     didn't supply one, and tags the span. Any additional positional or
     keyword arguments are forwarded unchanged to *fn*.
 
+    Works for both ``def`` and ``async def`` activities: the wrapper
+    preserves *fn*'s async-ness via :func:`inspect.iscoroutinefunction`,
+    so coroutine activities are awaited (not returned unawaited).
+
     When called outside a Temporal activity context (unit tests that
     invoke the activity directly), the ``activity.info()`` lookup is
     skipped and the span is tagged with whatever ``run_id`` the envelope
     already carries.
     """
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapper(envelope: Envelope, *args: object, **kwargs: object) -> _R:
+            envelope = _backfill_run_id(envelope)
+            set_envelope_span_attrs(trace.get_current_span(), envelope)
+            # fn is iscoroutinefunction here, so fn(...) returns an Awaitable.
+            # mypy cannot narrow Callable[..., _R] through iscoroutinefunction.
+            return await fn(envelope, *args, **kwargs)  # type: ignore[no-any-return]
+
+        return async_wrapper  # type: ignore[return-value]
 
     @functools.wraps(fn)
     def wrapper(envelope: Envelope, *args: object, **kwargs: object) -> _R:
-        if not envelope.run_id and activity.in_activity():
-            envelope = envelope.model_copy(update={"run_id": activity.info().workflow_run_id})
+        envelope = _backfill_run_id(envelope)
         set_envelope_span_attrs(trace.get_current_span(), envelope)
         return fn(envelope, *args, **kwargs)
 

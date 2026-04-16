@@ -88,6 +88,30 @@ class TestCarrierRoundtrip:
         assert baggage.get_baggage("tenant", context) == "acme"
 
 
+class TestInstrumentActivityAsync:
+    async def test_async_activity_is_awaited_and_span_is_tagged(
+        self, spans: InMemorySpanExporter
+    ) -> None:
+        """Decorating an ``async def`` must produce an awaitable that runs the body."""
+        calls: list[Envelope] = []
+
+        @instrument_activity
+        async def _probe(envelope: Envelope) -> Envelope:
+            calls.append(envelope)
+            return envelope
+
+        env = _envelope()
+        with _tracer.start_as_current_span("RunActivity:probe"):
+            result = await _probe(env)
+
+        assert calls == [env]
+        assert result == env
+        (recorded,) = spans.get_finished_spans()
+        attrs = recorded.attributes or {}
+        assert attrs["business_tx_id"] == "tx-001"
+        assert attrs["step_id"] == "start"
+
+
 class TestInstrumentActivityDecorator:
     def test_tags_current_span_when_called_in_activity_env(
         self, spans: InMemorySpanExporter

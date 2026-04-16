@@ -255,3 +255,29 @@ class TestActivitySpanAttributes:
         assert attrs["business_tx_id"] == env.business_tx_id
         assert attrs["step_id"] == env.step_id
         assert attrs["payload_ref_sha256"] == env.payload_ref.sha256
+
+    def test_compensate_reserve_inventory_tags_current_span(
+        self,
+        memory_store: Store,  # noqa: ARG002
+        db_conn: sqlite3.Connection,  # noqa: ARG002
+        spans: InMemorySpanExporter,
+    ) -> None:
+        # Drive the orphan-tombstone branch: no prior reservation means the
+        # compensation activity runs without needing _make_envelope -> reserve
+        # setup, so the test isolates the decorator contract from activity
+        # internals.
+        env = _make_envelope(["w"])
+        comp_env = _compensation_envelope(env, env.payload_ref)
+        tracer = trace.get_tracer(__name__)
+        with tracer.start_as_current_span("RunActivity:compensate_reserve_inventory"):
+            compensate_reserve_inventory(comp_env)
+
+        (recorded,) = [
+            s
+            for s in spans.get_finished_spans()
+            if s.name == "RunActivity:compensate_reserve_inventory"
+        ]
+        attrs = recorded.attributes or {}
+        assert attrs["business_tx_id"] == comp_env.business_tx_id
+        assert attrs["step_id"] == comp_env.step_id
+        assert attrs["payload_ref_sha256"] == comp_env.payload_ref.sha256
