@@ -28,6 +28,15 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 
 ## Backlog (Prioritized)
 
+- [ ] **BK-001 -- Explicit Temporal Client lifecycle in Service A**
+  `service_a/app.py` currently relies on GC to clean up the `Client` when the
+  FastAPI lifespan ends. The SDK's Rust runtime owns a background thread tied
+  to the handle; under ASGI dev-reload or test harnesses that recreate the app
+  multiple times, handles accumulate until interpreter exit. Investigate
+  whether the SDK exposes an explicit close hook (or adopt a
+  `contextlib.closing`-style guard once it does), and wire it into the
+  lifespan's `finally` block. (Raised in PR #6 review.)
+
 - [ ] **IS-006 -- Scenario scripts**
   Implement `scenarios/run_happy.py` and `run_unhappy.py`: POST to Service A, wait for
   workflow completion, print Jaeger and Temporal UI links.
@@ -38,11 +47,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
   Propagate W3C `traceparent` + `baggage` via Envelope fields at every service boundary.
   **Prerequisite:** update `pyproject.toml` dependency to `remote-store[azure,otel]` before
   using `remote_store.ext.otel` (`otel_hooks` / `otel_observe`) for store-level tracing spans.
-
-- [ ] **IS-004 -- Activity implementations (B/C/D)**
-  Real logic per activity: download payload via `shared/blob.py`, execute local
-  domain action (SQLite write), upload result blob, return new `BlobRef`.
-  Includes `compensate_reserve_inventory` (idempotent release).
 
 ---
 

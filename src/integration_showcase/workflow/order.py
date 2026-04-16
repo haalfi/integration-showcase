@@ -13,6 +13,9 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from integration_showcase.shared.envelope import BlobRef, Envelope
+    from integration_showcase.workflow.envelopes import (
+        compensate_reserve_inventory_envelope,
+    )
 
 
 _DEFAULT_RETRY = RetryPolicy(
@@ -56,9 +59,15 @@ class OrderWorkflow:
                 retry_policy=_PAYMENT_RETRY,
             )
         except Exception:
+            # Single source of truth for compensation envelope construction
+            # (DESIGN.md §Compensation rules); the tests import the same
+            # helper so the idempotency_key contract cannot drift.
+            compensate_envelope = compensate_reserve_inventory_envelope(
+                inventory_envelope, inventory_ref
+            )
             await workflow.execute_activity(
                 "compensate_reserve_inventory",
-                inventory_envelope,
+                compensate_envelope,
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=_COMPENSATE_RETRY,
             )

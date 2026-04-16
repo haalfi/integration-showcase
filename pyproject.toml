@@ -65,10 +65,11 @@ markers = [
 source = ["integration_showcase"]
 omit = [
   "*/service_a/app.py",
-  "*/service_b/activities.py",
-  "*/service_c/activities.py",
-  "*/service_d/activities.py",
+  "*/service_b/worker.py",
+  "*/service_c/worker.py",
+  "*/service_d/worker.py",
   "*/workflow/order.py",
+  "*/workflow/worker.py",
 ]
 
 [tool.ruff]

@@ -2,15 +2,9 @@
 
 Run with: pytest -m integration  (after docker compose up -d)
 
-Env vars required:
-    STORE_URL       Azurite connection string — use the well-known default
-                    AccountKey documented at
-                    https://learn.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key
-                    Example format:
-                    DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;
-                    AccountKey=<well-known-key>;
-                    BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;
-    STORE_CONTAINER Azure Blob container name (must exist in Azurite)
+No manual setup required: the session fixture in conftest.py automatically
+creates the Azurite container and sets STORE_URL / STORE_CONTAINER defaults.
+The fixture skips the session with a clear message if Azurite is unreachable.
 """
 
 from __future__ import annotations

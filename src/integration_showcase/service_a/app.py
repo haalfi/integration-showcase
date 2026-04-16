@@ -23,16 +23,18 @@ _temporal_client: Client | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Connect Temporal client at startup; close gracefully on shutdown."""
+    """Connect Temporal client at startup; drop reference on shutdown.
+
+    ``temporalio.client.Client`` has no ``close`` method -- the underlying
+    connection is cleaned up by GC when the reference is dropped.
+    """
     global _temporal_client
     address = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
     _temporal_client = await Client.connect(address, data_converter=pydantic_data_converter)
     try:
         yield
     finally:
-        if _temporal_client is not None:
-            await _temporal_client.close()
-            _temporal_client = None
+        _temporal_client = None
 
 
 app = FastAPI(title="integration-showcase -- Service A (Ingress)", lifespan=lifespan)
@@ -81,7 +83,7 @@ async def create_order(request: OrderRequest) -> OrderResponse:
     )
 
     # Fire-and-forget: start the workflow without awaiting completion
-    await _temporal_client.start_workflow(  # type: ignore[misc]
+    await _temporal_client.start_workflow(
         "OrderWorkflow",
         envelope,
         id=workflow_id,
