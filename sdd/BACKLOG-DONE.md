@@ -2,16 +2,21 @@
 
 - [x] **IS-005b -- Log correlation**
   `shared/log_setup.py`: `OtelContextFilter` reads `trace.get_current_span().get_span_context()`
-  and `baggage.get_baggage("business_tx_id")` and injects `trace_id` (32-char W3C hex),
+  and `baggage.get_baggage(BUSINESS_TX_ID_BAGGAGE_KEY)` and injects `trace_id` (32-char W3C hex),
   `span_id` (16-char hex), and `business_tx_id` as `LogRecord` extras; `JsonFormatter`
   emits them as top-level fields (alongside `timestamp`, `level`, `service`, `logger`,
-  `message`) for Loki/ES-friendly querying. `setup_logging(service_name)` replaces root
-  logger handlers with a stdout `StreamHandler` guarded by the filter. Called automatically
-  from `setup_tracing` so all five service entry points (service-a lifespan, workers B/C/D,
-  workflow worker) get structured log correlation with no additional callsites. 33 new unit
-  tests cover filter behaviour inside/outside spans, baggage injection, JSON field completeness,
-  trace_id format validation, and setup_logging idempotency. Full suite 137 tests @ 92.67%
-  coverage; log_setup.py at 100%.
+  `message`); `exc_info`/`stack_info` are preserved as `exception`/`stack` fields so
+  `logger.exception(...)` retains its traceback. `setup_logging(service_name)` replaces
+  root logger handlers with a stdout `StreamHandler` and explicitly patches the three
+  uvicorn loggers (`uvicorn`, `uvicorn.access`, `uvicorn.error`) with the same handler,
+  clearing their prior handlers and keeping `propagate=False` — this ensures service-a's
+  request access logs and error logs are JSON-structured even though uvicorn configures
+  those loggers before the FastAPI lifespan runs. Called automatically from `setup_tracing`
+  so all five service entry points get structured log correlation with no additional
+  callsites. `BUSINESS_TX_ID_BAGGAGE_KEY` constant added to `shared/constants.py`; both
+  the producer (`service_a/app.py`) and consumer (`log_setup.py`) import it. 35 unit tests;
+  `TestSetupLogging` uses a restore fixture for logger-state isolation and validates emitted
+  JSON via `capsys`. Full suite 137 tests @ 92.66% coverage.
 
 - [x] **IS-006 -- Scenario scripts**
   `scenarios/run_happy.py` and `scenarios/run_unhappy.py` POST to Service A,

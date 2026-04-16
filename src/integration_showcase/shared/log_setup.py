@@ -14,6 +14,12 @@ from datetime import UTC, datetime
 
 from opentelemetry import baggage, trace
 
+from integration_showcase.shared.constants import BUSINESS_TX_ID_BAGGAGE_KEY
+
+# Uvicorn configures these loggers with propagate=False before the FastAPI
+# lifespan runs; setup_logging patches them so they emit JSON too.
+_UVICORN_LOGGERS = ("uvicorn", "uvicorn.access", "uvicorn.error")
+
 
 class OtelContextFilter(logging.Filter):
     """Inject OTel trace context and baggage into every LogRecord.
@@ -34,7 +40,7 @@ class OtelContextFilter(logging.Filter):
         else:
             record.trace_id = ""
             record.span_id = ""
-        record.business_tx_id = baggage.get_baggage("business_tx_id") or ""
+        record.business_tx_id = baggage.get_baggage(BUSINESS_TX_ID_BAGGAGE_KEY) or ""
         return True
 
 
@@ -42,9 +48,11 @@ class JsonFormatter(logging.Formatter):
     """Format log records as single-line JSON with trace correlation fields.
 
     Emits ``trace_id``, ``span_id``, and ``business_tx_id`` as top-level
-    fields for Loki / Elasticsearch indexing. Requires
-    :class:`OtelContextFilter` to be installed on the same handler so those
-    fields are guaranteed to exist on the record.
+    fields for Loki / Elasticsearch indexing. Preserves ``exc_info`` and
+    ``stack_info`` as ``exception`` and ``stack`` fields so that
+    ``logger.exception(...)`` calls retain their traceback in the JSON
+    output. Requires :class:`OtelContextFilter` to be installed on the same
+    handler so the trace fields are guaranteed to exist on the record.
     """
 
     def __init__(self, service_name: str) -> None:
@@ -52,32 +60,47 @@ class JsonFormatter(logging.Formatter):
         self._service = service_name
 
     def format(self, record: logging.LogRecord) -> str:
-        return json.dumps(
-            {
-                "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
-                "level": record.levelname,
-                "service": self._service,
-                "logger": record.name,
-                "message": record.getMessage(),
-                "trace_id": getattr(record, "trace_id", ""),
-                "span_id": getattr(record, "span_id", ""),
-                "business_tx_id": getattr(record, "business_tx_id", ""),
-            }
-        )
+        doc: dict[str, object] = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+            "level": record.levelname,
+            "service": self._service,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "trace_id": getattr(record, "trace_id", ""),
+            "span_id": getattr(record, "span_id", ""),
+            "business_tx_id": getattr(record, "business_tx_id", ""),
+        }
+        if record.exc_info:
+            doc["exception"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            doc["stack"] = self.formatStack(record.stack_info)
+        return json.dumps(doc)
 
 
 def setup_logging(service_name: str) -> None:
-    """Configure the root logger with a JSON handler that injects OTel context.
+    """Configure the root logger and uvicorn loggers with JSON + OTel context.
 
     Replaces any existing handlers on the root logger with a single
     ``StreamHandler`` (stdout) that is guarded by :class:`OtelContextFilter`
-    and formatted by :class:`JsonFormatter`. Safe to call multiple times —
-    subsequent calls replace the previous configuration.
+    and formatted by :class:`JsonFormatter`. The same handler is attached to
+    the three uvicorn loggers (``uvicorn``, ``uvicorn.access``,
+    ``uvicorn.error``) with ``propagate=False`` so their output stays JSON
+    even though uvicorn configures them before the FastAPI lifespan runs.
+
+    Safe to call multiple times — subsequent calls replace the previous
+    configuration.
     """
     handler = logging.StreamHandler(sys.stdout)
     handler.addFilter(OtelContextFilter())
     handler.setFormatter(JsonFormatter(service_name))
+
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(logging.INFO)
+
+    for name in _UVICORN_LOGGERS:
+        uv = logging.getLogger(name)
+        uv.handlers.clear()
+        uv.addHandler(handler)
+        uv.propagate = False

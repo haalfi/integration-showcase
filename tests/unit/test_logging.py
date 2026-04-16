@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import json
 import logging as stdlib_logging
+import sys
+from collections.abc import Generator
 
 import pytest
 from opentelemetry import baggage, trace
 from opentelemetry.context import attach, detach
 
+from integration_showcase.shared.constants import BUSINESS_TX_ID_BAGGAGE_KEY
 from integration_showcase.shared.log_setup import (
+    _UVICORN_LOGGERS,
     JsonFormatter,
     OtelContextFilter,
     setup_logging,
@@ -89,7 +93,7 @@ class TestOtelContextFilter:
         assert len(record.span_id) == 16  # type: ignore[attr-defined]
 
     def test_business_tx_id_from_baggage(self) -> None:
-        token = attach(baggage.set_baggage("business_tx_id", "tx-abc-123"))
+        token = attach(baggage.set_baggage(BUSINESS_TX_ID_BAGGAGE_KEY, "tx-abc-123"))
         try:
             record = _apply_filter(_make_record())
         finally:
@@ -166,7 +170,7 @@ class TestJsonFormatter:
         assert len(str(doc["trace_id"])) == 32
 
     def test_business_tx_id_in_json(self) -> None:
-        token = attach(baggage.set_baggage("business_tx_id", "tx-999"))
+        token = attach(baggage.set_baggage(BUSINESS_TX_ID_BAGGAGE_KEY, "tx-999"))
         try:
             doc = _fmt()
         finally:
@@ -184,30 +188,77 @@ class TestJsonFormatter:
         # Should parse without error
         datetime.fromisoformat(ts)
 
+    def test_exception_traceback_in_json(self) -> None:
+        """logger.exception(...) must not drop the traceback in JSON output."""
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            record = stdlib_logging.LogRecord(
+                name="test.logger",
+                level=stdlib_logging.ERROR,
+                pathname="",
+                lineno=0,
+                msg="caught",
+                args=(),
+                exc_info=sys.exc_info(),
+            )
+            _apply_filter(record)
+            doc = json.loads(JsonFormatter("svc").format(record))
+        assert "exception" in doc
+        assert "ValueError" in str(doc["exception"])
+        assert "boom" in str(doc["exception"])
+
+    def test_no_exception_field_without_exc_info(self) -> None:
+        assert "exception" not in _fmt()
+
 
 # ---------------------------------------------------------------------------
 # setup_logging
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture()
+def _restore_loggers() -> Generator[None, None, None]:
+    """Snapshot root + uvicorn logger state and restore after test."""
+    root = stdlib_logging.getLogger()
+    root_state = (list(root.handlers), root.level)
+    uv_states = {}
+    for name in _UVICORN_LOGGERS:
+        uv = stdlib_logging.getLogger(name)
+        uv_states[name] = (list(uv.handlers), uv.level, uv.propagate)
+    yield
+    root.handlers[:] = root_state[0]
+    root.setLevel(root_state[1])
+    for name, (handlers, level, propagate) in uv_states.items():
+        uv = stdlib_logging.getLogger(name)
+        uv.handlers[:] = handlers
+        uv.setLevel(level)
+        uv.propagate = propagate
+
+
 class TestSetupLogging:
-    def test_root_logger_has_otel_filter(self) -> None:
-        setup_logging("test-svc")
-        root = stdlib_logging.getLogger()
-        filters = [f for h in root.handlers for f in h.filters]
-        assert any(isinstance(f, OtelContextFilter) for f in filters)
+    @pytest.fixture(autouse=True)
+    def _restore(self, _restore_loggers: None) -> None:
+        """Isolate root/uvicorn logger state for every test in this class."""
 
-    def test_root_logger_has_json_formatter(self) -> None:
-        setup_logging("test-svc")
-        root = stdlib_logging.getLogger()
-        formatters = [h.formatter for h in root.handlers]
-        assert any(isinstance(f, JsonFormatter) for f in formatters)
+    def test_emits_json_with_service_message_and_trace_id(
+        self, capsys: pytest.CaptureFixture[str], spans: object
+    ) -> None:
+        tracer = trace.get_tracer("test")
+        setup_logging("svc-x")
+        with tracer.start_as_current_span("s") as span:
+            expected_trace_id = format(span.get_span_context().trace_id, "032x")
+            stdlib_logging.getLogger("test").info("hi")
+        doc = json.loads(capsys.readouterr().out.strip())
+        assert doc["service"] == "svc-x"
+        assert doc["message"] == "hi"
+        assert doc["trace_id"] == expected_trace_id
 
-    def test_root_logger_level_is_info(self) -> None:
-        setup_logging("test-svc")
-        assert stdlib_logging.getLogger().level == stdlib_logging.INFO
-
-    def test_subsequent_call_does_not_stack_handlers(self) -> None:
+    def test_subsequent_call_does_not_duplicate_output(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         setup_logging("svc-a")
         setup_logging("svc-b")
-        assert len(stdlib_logging.getLogger().handlers) == 1
+        stdlib_logging.getLogger("test").info("once")
+        lines = [ln for ln in capsys.readouterr().out.strip().splitlines() if ln]
+        assert len(lines) == 1
