@@ -17,7 +17,7 @@ from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
 
 from integration_showcase.shared import blob
-from integration_showcase.shared.constants import TASK_QUEUE
+from integration_showcase.shared.constants import BUSINESS_TX_ID_BAGGAGE_KEY, TASK_QUEUE
 from integration_showcase.shared.envelope import BlobRef, Envelope
 from integration_showcase.shared.otel import (
     inject_carrier_into_envelope,
@@ -85,7 +85,7 @@ async def create_order(request: OrderRequest) -> OrderResponse:
 
     # Seed baggage so the business_tx_id rides the whole trace (DESIGN.md
     # §OTel span attributes; unified baggage per Q3).
-    token = attach(baggage.set_baggage("business_tx_id", business_tx_id))
+    token = attach(baggage.set_baggage(BUSINESS_TX_ID_BAGGAGE_KEY, business_tx_id))
     try:
         with _tracer.start_as_current_span("http.ingress POST /order") as span:
             payload = json.dumps(

@@ -37,15 +37,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
   `contextlib.closing`-style guard once it does), and wire it into the
   lifespan's `finally` block. (Raised in PR #6 review.)
 
-- [ ] **IS-005b -- Log correlation (trace_id / span_id / business_tx_id in logs)**
-  Split from IS-005. Configure structured logging so every log record carries the
-  current `trace_id`, `span_id`, and `business_tx_id` (from OTel baggage). Approach:
-  a `logging.Filter` that reads `trace.get_current_span().get_span_context()` and
-  `baggage.get_baggage("business_tx_id")` and injects them as `LogRecord` extras;
-  a JSON formatter emits them as top-level fields for Loki/ES-friendly querying.
-  Validate end-to-end: Jaeger trace_id should match what appears in the service
-  stdout JSON logs.
-
 ---
 
 ## Ideas
