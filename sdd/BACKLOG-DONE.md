@@ -19,8 +19,8 @@
   - New §9 "Produktionshärtung" with five subsections: OTel Collector, OTLP logs, metrics
     cardinality, blob immutability/versioning policies, and a production-grade status
     endpoint (replacing direct cluster polling).
-  No code changes. Discrepancy noted: Service A currently returns HTTP 200, not 202 — see
-  follow-up note on the PR.
+  No code changes. Known gap tracked separately: Service A currently returns HTTP 200,
+  not 202 — see `IS-013` in `BACKLOG.md`.
 
 - [x] **BUG-001 -- Activity mis-routing: all activities dispatched to TASK_QUEUE**
   All four `execute_activity` calls in `OrderWorkflow.run` omitted `task_queue=`, so

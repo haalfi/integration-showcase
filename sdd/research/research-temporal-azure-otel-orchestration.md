@@ -52,8 +52,8 @@ flowchart LR
         SD["Service D<br/>Shipping DB"]
     end
 
-    subgraph Obs["OpenTelemetry Collector"]
-        OT["Traces · Logs · Metrics<br/>traceparent + business_tx_id"]
+    subgraph Obs["Tracing-Backend (Jaeger, direkt)"]
+        OT["Traces<br/>traceparent + business_tx_id"]
     end
 
     A1 --> A2 --> T1
@@ -76,7 +76,7 @@ flowchart LR
 Jeder Hop zwischen Services trägt **denselben Umschlag** – niemals die
 Nutzdaten selbst:
 
-```json
+```jsonc
 {
   "workflow_id": "order-123",
   "run_id": "run-456",
@@ -85,9 +85,9 @@ Nutzdaten selbst:
   "step_id": "reserve-inventory",
   "payload_ref": {
     "blob_url": "https://acct.blob.core.windows.net/workflows/tx-789/input.json",
-    "sha256": "…",
-    "etag": "\"0x8DB...\"",
-    "version_id": "2026-04-15T12:34:56.0000000Z"
+    "sha256": "…",                    // pflicht — backend-unabhängige Integrität
+    "etag": "…",                      // optional — leer wenn Backend es nicht liefert
+    "version_id": "…"                 // optional — leer wenn Backend es nicht liefert
   },
   "traceparent": "00-<trace-id>-<span-id>-01",
   "baggage": { "correlation.id": "tx-789" },
@@ -134,7 +134,7 @@ sequenceDiagram
     participant B as Service B<br/>(Inventory)
     participant C as Service C<br/>(Payment)
     participant D as Service D<br/>(Shipping)
-    participant O as OTel Collector
+    participant O as Jaeger (direkt)
 
     U->>A: POST /order (Payload)
     A->>A: generate business_tx_id=tx-789
@@ -235,7 +235,7 @@ sequenceDiagram
     participant B as Service B<br/>(Inventory)
     participant C as Service C<br/>(Payment)
     participant AB as Azure Blob
-    participant O as OTel Collector
+    participant O as Jaeger (direkt)
 
     Note over T,C: Happy Prefix: reserve-inventory erfolgreich
 

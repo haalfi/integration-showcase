@@ -8,7 +8,11 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 
 **Status legend:** `[ ]` pending · `[~]` in progress
 
-**Ordering:** newest first within each section.
+**Ordering:**
+- *Backlog (Prioritized)* is execution-ordered: concept-first, then small wins,
+  then substantive code work, then cleanup. Insert new items at the position
+  that matches their priority, not at the top.
+- *Ideas* is newest-first; new ideas go to the top.
 
 **Completing work:**
 - Fully done -> delete from here, add to `BACKLOG-DONE.md` as `[x]` (same commit as code change).
@@ -30,6 +34,14 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 
 Ordered by recommended execution: concept-first (sets the acceptance bar),
 then small-wins, then the substantive code work, then cleanup.
+
+- [ ] **IS-013 -- Service A `POST /order` returns 202 Accepted**
+  Concept §4.1 (updated in IS-007) documents `202 Accepted {business_tx_id, workflow_id,
+  traceparent}` immediately after `StartWorkflow` -- the showcase is fire-and-forget. The
+  route at `src/integration_showcase/service_a/app.py:73` is
+  `@app.post("/order", response_model=OrderResponse)` with no `status_code=`, so FastAPI
+  returns HTTP 200. One-line fix: add `status_code=202`. Update any test that asserts on
+  the status (`tests/integration/test_service_a.py` if applicable).
 
 - [ ] **IS-008 -- Workflow-level span attributes**
   Temporal's `TracingInterceptor` creates a `RunWorkflow:OrderWorkflow` span that currently
