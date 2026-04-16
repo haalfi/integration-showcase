@@ -7,20 +7,19 @@
 
 > **Temporal** ist das **Prozess-Hauptbuch**, **Azure Blob Storage** ist der
 > **Payload-Tresor**, und **OpenTelemetry** ist das **Nervensystem**, das
-> beides über Service-Grenzen hinweg verbindet [^temporal-ext] [^azure-lp]
-> [^otel-temporal].
+> beides über Service-Grenzen hinweg verbindet.
 
 Damit entstehen drei klar getrennte Zustandsschichten:
 
-| Schicht        | Träger             | Inhalt                                                                                   |
-| -------------- | ------------------ | ---------------------------------------------------------------------------------------- |
-| Orchestrierung | Temporal           | Workflow-/Run-IDs, Activities, Retries, Kompensationen, Event History [^temporal-err]    |
-| Payload        | Azure Blob Storage | Unveränderliche Datenblobs, Versionen, Metadaten (Claim-Check-Pattern) [^temporal-claim] |
-| Observability  | OpenTelemetry      | Traces, Spans, Logs, Business-Korrelations-IDs [^otel-corr]                              |
+| Schicht        | Träger             | Inhalt                                                                              |
+| -------------- | ------------------ | ----------------------------------------------------------------------------------- |
+| Orchestrierung | Temporal           | Workflow-/Run-IDs, Activities, Retries, Kompensationen, Event History               |
+| Payload        | Azure Blob Storage | Unveränderliche Datenblobs, Versionen, Metadaten (Claim-Check-Pattern)              |
+| Observability  | OpenTelemetry      | Traces, Spans, Logs, Business-Korrelations-IDs                                      |
 
 Diese Trennung hält die Temporal-History schlank, erlaubt beliebig große
 Nutzdaten und macht jeden Seiteneffekt genau **einem Workflow-Schritt** und
-**einer Blob-Referenz** zuordenbar [^temporal-idem].
+**einer Blob-Referenz** zuordenbar.
 
 ---
 
@@ -74,8 +73,8 @@ flowchart LR
 
 ## 3. Kanonischer Envelope
 
-Jeder Hop zwischen Services trägt **denselben Umschlag** — niemals die
-Nutzdaten selbst [^temporal-claim] [^otel-corr]:
+Jeder Hop zwischen Services trägt **denselben Umschlag** – niemals die
+Nutzdaten selbst:
 
 ```json
 {
@@ -100,20 +99,18 @@ Nutzdaten selbst [^temporal-claim] [^otel-corr]:
 
 **Regeln:**
 
-1. Services tauschen **ausschließlich** den Envelope plus Blob-Referenz aus
-   [^temporal-ext].
+1. Services tauschen **ausschließlich** den Envelope plus Blob-Referenz aus.
 2. Jeder Service lädt den Payload selbst aus Blob Storage, führt **eine**
    lokale Fachaktion aus und persistiert das Ergebnis in seiner **eigenen**
-   Datenbank [^saga].
+   Datenbank.
 3. Der Service meldet Erfolg/Fehler als Activity-Resultat zurück an Temporal
-   mit demselben `business_tx_id` und einer ggf. neuen `payload_ref`
-   [^temporal-err].
+   mit demselben `business_tx_id` und einer ggf. neuen `payload_ref`.
 4. `idempotency_key` schützt gegen Temporal-Retries (Activities dürfen
-   mehrfach ausgeführt werden) [^temporal-idem].
+   mehrfach ausgeführt werden).
 
 ---
 
-## 4. Happy Path — Spans & Flow
+## 4. Happy Path – Spans & Flow
 
 ### 4.1 Sequenzdiagramm (Happy Path)
 
@@ -191,22 +188,21 @@ flowchart TD
 
 **Alle Spans** tragen als Attribute mindestens:
 `business_tx_id`, `workflow_id`, `run_id`, `step_id`, `payload_ref.etag`,
-`schema_version` [^otel-corr] [^otel-prop].
+`schema_version`.
 
 ---
 
-## 5. Unhappy Path — Retry, Fehler & Kompensation
+## 5. Unhappy Path – Retry, Fehler & Kompensation
 
 ### 5.1 Szenario
 
 `charge-payment` scheitert dauerhaft → Temporal löst **Saga-Kompensation**
-aus [^temporal-err] [^saga]:
+aus:
 
 1. Retry mit exponentiellem Backoff (Temporal-Retry-Policy).
 2. Bei finalem Fehlschlag: Kompensations-Activities **rückwärts** ausführen.
 3. Jeder Undo-Schritt trägt denselben Envelope + neue `step_id`
-   (z. B. `compensate.reserve-inventory`) und bleibt voll idempotent
-   [^temporal-idem].
+   (z. B. `compensate.reserve-inventory`) und bleibt voll idempotent.
 
 ### 5.2 Sequenzdiagramm (Unhappy Path)
 
@@ -290,42 +286,41 @@ flowchart TD
 ```
 
 Dank identischem `business_tx_id` auf **allen** Spans lässt sich der
-komplette Pfad — inklusive Retries und Kompensationen — mit **einer** Query
-im Tracing-Backend rekonstruieren [^otel-corr].
+komplette Pfad – inklusive Retries und Kompensationen – mit **einer** Query
+im Tracing-Backend rekonstruieren.
 
 ---
 
 ## 6. Traceability-Regeln (Checkliste)
 
 - [ ] `business_tx_id` steckt in **Span-Attributen UND Log-Feldern**, nicht
-      nur in Headern [^otel-corr].
+      nur in Headern.
 - [ ] **W3C Trace Context** (`traceparent`) + **Baggage** an jeder
-      Service-Grenze propagieren [^otel-prop].
+      Service-Grenze propagieren.
 - [ ] Blob-**Metadaten** enthalten `workflow_id`, `run_id`, `step_id`,
-      `schema_version` [^azure-ret].
-- [ ] Activities sind **idempotent** (Temporal darf wiederholen) —
-      `idempotency_key` in jeder Fachoperation prüfen [^temporal-idem].
-- [ ] Hohe Kardinalitäts-IDs **nicht** in Metrik-Labels — nur Traces/Logs
-      [^otel-corr].
+      `schema_version`.
+- [ ] Activities sind **idempotent** (Temporal darf wiederholen) –
+      `idempotency_key` in jeder Fachoperation prüfen.
+- [ ] Hohe Kardinalitäts-IDs **nicht** in Metrik-Labels – nur Traces/Logs.
 - [ ] Jeder persistierte Seiteneffekt ist **genau einem** Workflow-Schritt
-      **und einer** Blob-Referenz zuordenbar [^temporal-err].
+      **und einer** Blob-Referenz zuordenbar.
 
 ---
 
 ## 7. Glossar & Feldherkunft
 
-| Feld              | Schicht           | Definition / Herkunft                                                                                                       |
-| ----------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `workflow_id`     | Prozess-Hauptbuch | Eindeutige Geschäfts-ID des Workflows, vom Starter vergeben; Primärschlüssel in der Temporal Event History [^temporal-err]. |
-| `run_id`          | Prozess-Hauptbuch | Von Temporal vergebene Lauf-ID; unterscheidet mehrere Ausführungen desselben `workflow_id` [^temporal-err].                 |
-| `business_tx_id`  | Nervensystem      | Fachliche Korrelations-ID; stabil über Workflow-Restarts/Child-Workflows [^otel-corr].                                      |
-| `parent_step_id`  | Prozess-Hauptbuch | Vorheriger Schritt in der Saga; erlaubt Rekonstruktion der Kette [^saga].                                                   |
-| `step_id`         | Prozess-Hauptbuch | Logischer Name des aktuellen Aktivitätsschritts; landet als Span-Attribut [^otel-temporal].                                 |
-| `payload_ref`     | Payload-Tresor    | Claim-Check-Referenz auf das Blob [^temporal-claim].                                                                        |
-| `traceparent`     | Nervensystem      | W3C Trace Context Header; verknüpft Spans über Service-Grenzen hinweg [^otel-prop].                                         |
-| `baggage`         | Nervensystem      | W3C Baggage: fachliche Key-Value-Paare, die kontextuell propagiert werden [^otel-prop].                                     |
-| `schema_version`  | übergreifend      | Semver des Envelope-/Payload-Schemas; ermöglicht Kompatibilität bei Weiterentwicklung.                                      |
-| `idempotency_key` | Prozess-Hauptbuch | Deduplikations-Schlüssel für Activity-Retries; Formel: `business_tx_id:step_id:schema_version` [^temporal-idem].            |
+| Feld              | Schicht           | Definition / Herkunft                                                                                                    |
+| ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `workflow_id`     | Prozess-Hauptbuch | Eindeutige Geschäfts-ID des Workflows, vom Starter vergeben; Primärschlüssel in der Temporal Event History.              |
+| `run_id`          | Prozess-Hauptbuch | Von Temporal vergebene Lauf-ID; unterscheidet mehrere Ausführungen desselben `workflow_id`.                              |
+| `business_tx_id`  | Nervensystem      | Fachliche Korrelations-ID; stabil über Workflow-Restarts/Child-Workflows.                                                |
+| `parent_step_id`  | Prozess-Hauptbuch | Vorheriger Schritt in der Saga; erlaubt Rekonstruktion der Kette.                                                        |
+| `step_id`         | Prozess-Hauptbuch | Logischer Name des aktuellen Aktivitätsschritts; landet als Span-Attribut.                                               |
+| `payload_ref`     | Payload-Tresor    | Claim-Check-Referenz auf das Blob.                                                                                       |
+| `traceparent`     | Nervensystem      | W3C Trace Context Header; verknüpft Spans über Service-Grenzen hinweg.                                                   |
+| `baggage`         | Nervensystem      | W3C Baggage: fachliche Key-Value-Paare, die kontextuell propagiert werden.                                               |
+| `schema_version`  | übergreifend      | Semver des Envelope-/Payload-Schemas; ermöglicht Kompatibilität bei Weiterentwicklung.                                   |
+| `idempotency_key` | Prozess-Hauptbuch | Deduplikations-Schlüssel für Activity-Retries; Formel: `business_tx_id:step_id:schema_version`.                          |
 
 ---
 
@@ -333,42 +328,20 @@ im Tracing-Backend rekonstruieren [^otel-corr].
 
 ### Prozess-Hauptbuch (Temporal)
 
-- Temporal — [_Error handling in distributed systems_](https://temporal.io/blog/error-handling-in-distributed-systems)
-- Temporal — [_Idempotency and durable execution_](https://temporal.io/blog/idempotency-and-durable-execution)
-- Temporal AI Cookbook — [_Claim-check pattern (Python)_](https://docs.temporal.io/ai-cookbook/claim-check-pattern-python)
-- Temporal Docs — [_External storage for large payloads_](https://docs.temporal.io/external-storage)
-- Federico Bevione (dev.to) — [_Transactions in Microservices, Part 3: Saga Pattern with Orchestration and Temporal.io_](https://dev.to/federico_bevione/transactions-in-microservices-part-3-saga-pattern-with-orchestration-and-temporalio-3e17)
+- Temporal – [_Error handling in distributed systems_](https://temporal.io/blog/error-handling-in-distributed-systems)
+- Temporal – [_Idempotency and durable execution_](https://temporal.io/blog/idempotency-and-durable-execution)
+- Temporal AI Cookbook – [_Claim-check pattern (Python)_](https://docs.temporal.io/ai-cookbook/claim-check-pattern-python)
+- Temporal Docs – [_External storage for large payloads_](https://docs.temporal.io/external-storage)
+- Federico Bevione (dev.to) – [_Transactions in Microservices, Part 3: Saga Pattern with Orchestration and Temporal.io_](https://dev.to/federico_bevione/transactions-in-microservices-part-3-saga-pattern-with-orchestration-and-temporalio-3e17)
 
 ### Payload-Tresor (Azure Blob Storage)
 
-- Microsoft Learn — [_Durable Task Scheduler: large payloads_](https://learn.microsoft.com/en-us/azure/durable-task/scheduler/durable-task-scheduler-large-payloads)
-- Microsoft Learn — [_Immutable storage for Azure Blob Storage (Overview)_](https://learn.microsoft.com/en-us/azure/storage/blobs/immutable-storage-overview)
-- OneUptime — [_How to configure Azure Blob Storage retention policies for compliance_](https://oneuptime.com/blog/post/2026-02-16-how-to-configure-azure-blob-storage-retention-policies-for-compliance/view)
+- Microsoft Learn – [_Durable Task Scheduler: large payloads_](https://learn.microsoft.com/en-us/azure/durable-task/scheduler/durable-task-scheduler-large-payloads)
+- Microsoft Learn – [_Immutable storage for Azure Blob Storage (Overview)_](https://learn.microsoft.com/en-us/azure/storage/blobs/immutable-storage-overview)
+- OneUptime – [_How to configure Azure Blob Storage retention policies for compliance_](https://oneuptime.com/blog/post/2026-02-16-how-to-configure-azure-blob-storage-retention-policies-for-compliance/view)
 
 ### Nervensystem (OpenTelemetry)
 
-- OneUptime — [_Instrument Temporal.io workflows with OpenTelemetry_](https://oneuptime.com/blog/post/2026-02-06-instrument-temporal-io-workflows-opentelemetry/view)
-- OneUptime — [_OTel request-scoped correlation IDs_](https://oneuptime.com/blog/post/2026-02-06-otel-request-scoped-correlation-ids/view)
-- OneUptime — [_Distributed tracing context propagation_](https://oneuptime.com/blog/post/2026-02-02-distributed-tracing-context-propagation/view)
-
-[^temporal-err]: <https://temporal.io/blog/error-handling-in-distributed-systems>
-
-[^temporal-idem]: <https://temporal.io/blog/idempotency-and-durable-execution>
-
-[^temporal-claim]: <https://docs.temporal.io/ai-cookbook/claim-check-pattern-python>
-
-[^temporal-ext]: <https://docs.temporal.io/external-storage>
-
-[^saga]: <https://dev.to/federico_bevione/transactions-in-microservices-part-3-saga-pattern-with-orchestration-and-temporalio-3e17>
-
-[^azure-lp]: <https://learn.microsoft.com/en-us/azure/durable-task/scheduler/durable-task-scheduler-large-payloads>
-
-[^azure-immut]: <https://learn.microsoft.com/en-us/azure/storage/blobs/immutable-storage-overview>
-
-[^azure-ret]: <https://oneuptime.com/blog/post/2026-02-16-how-to-configure-azure-blob-storage-retention-policies-for-compliance/view>
-
-[^otel-temporal]: <https://oneuptime.com/blog/post/2026-02-06-instrument-temporal-io-workflows-opentelemetry/view>
-
-[^otel-corr]: <https://oneuptime.com/blog/post/2026-02-06-otel-request-scoped-correlation-ids/view>
-
-[^otel-prop]: <https://oneuptime.com/blog/post/2026-02-02-distributed-tracing-context-propagation/view>
+- OneUptime – [_Instrument Temporal.io workflows with OpenTelemetry_](https://oneuptime.com/blog/post/2026-02-06-instrument-temporal-io-workflows-opentelemetry/view)
+- OneUptime – [_OTel request-scoped correlation IDs_](https://oneuptime.com/blog/post/2026-02-06-otel-request-scoped-correlation-ids/view)
+- OneUptime – [_Distributed tracing context propagation_](https://oneuptime.com/blog/post/2026-02-02-distributed-tracing-context-propagation/view)
