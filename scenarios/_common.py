@@ -95,6 +95,9 @@ async def await_workflow(
     """
     # TracingInterceptor matches Service A / worker client config so any
     # OTel context on the caller is propagated across the Temporal boundary.
+    # The SDK has no explicit ``close()``; the underlying gRPC channel is
+    # released by GC. Acceptable for a short-lived script; callers invoking
+    # this helper in a hot loop should hold a single Client across iterations.
     client = await Client.connect(
         address,
         data_converter=pydantic_data_converter,
@@ -102,6 +105,19 @@ async def await_workflow(
     )
     handle = client.get_workflow_handle(workflow_id)
 
+    result: Any = None
+    exc: BaseException | None = None
+    try:
+        result = await handle.result()
+    except BaseException as caught:  # noqa: BLE001 -- scripts report any failure mode
+        exc = caught
+
+    # describe() runs AFTER result() so ``run_id`` captures the terminal run.
+    # ``handle.result()`` follows continuations by default (``follow_runs=True``);
+    # for a workflow using ``continue_as_new``, calling describe() before would
+    # pin an earlier run_id and the Temporal UI link would point at the wrong
+    # execution. OrderWorkflow does not continue_as_new today, but the order
+    # guards the helper against future workflow changes.
     run_id: str | None = None
     try:
         desc = await handle.describe()
@@ -110,11 +126,7 @@ async def await_workflow(
         # Describe is best-effort -- the run_id is only used for a UI link.
         pass
 
-    try:
-        result = await handle.result()
-        return result, None, run_id
-    except BaseException as exc:  # noqa: BLE001 -- scripts report any failure mode
-        return None, exc, run_id
+    return result, exc, run_id
 
 
 def find_application_error(exc: BaseException, error_type: str) -> ApplicationError | None:
