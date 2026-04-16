@@ -1,5 +1,14 @@
 # Completed Backlog Items
 
+- [x] **BK-001 -- Explicit Temporal Client lifecycle in Service A**
+  Investigation result: `temporalio.client.Client` intentionally exposes no `close()` method
+  (confirmed via SDK docs and context7 — "Clients do not have an explicit 'close' method").
+  The current lifespan already releases the reference in its `finally` block
+  (`_temporal_client = None`), which is the best achievable GC-prompt cleanup.
+  Unit tests bypass the lifespan entirely (via `httpx.ASGITransport` without lifespan trigger),
+  so no real client handles accumulate in the test harness.  Docstring updated to record the
+  finding.  No further action available until the SDK exposes a close hook.
+
 - [x] **IS-005b -- Log correlation**
   `shared/log_setup.py`: `OtelContextFilter` reads `trace.get_current_span().get_span_context()`
   and `baggage.get_baggage(BUSINESS_TX_ID_BAGGAGE_KEY)` and injects `trace_id` (32-char W3C hex),

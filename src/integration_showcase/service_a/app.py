@@ -35,8 +35,11 @@ _temporal_client: Client | None = None
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Bootstrap tracing and connect the Temporal client at startup.
 
-    ``temporalio.client.Client`` has no ``close`` method -- the underlying
-    connection is cleaned up by GC when the reference is dropped.
+    ``temporalio.client.Client`` intentionally exposes no ``close`` method
+    (confirmed: SDK docs, BK-001).  The underlying Rust-core connection is
+    cleaned up by GC once the reference is released.  The ``finally`` block
+    below nulls the module-level reference so GC can reclaim the handle
+    promptly on lifespan teardown (e.g. ASGI dev-reload, test harness).
     """
     global _temporal_client
     setup_tracing("service-a")
