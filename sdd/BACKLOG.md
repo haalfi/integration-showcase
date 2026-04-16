@@ -39,11 +39,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
   **Prerequisite:** update `pyproject.toml` dependency to `remote-store[azure,otel]` before
   using `remote_store.ext.otel` (`otel_hooks` / `otel_observe`) for store-level tracing spans.
 
-- [ ] **IS-004 -- Activity implementations (B/C/D)**
-  Real logic per activity: download payload via `shared/blob.py`, execute local
-  domain action (SQLite write), upload result blob, return new `BlobRef`.
-  Includes `compensate_reserve_inventory` (idempotent release).
-
 ---
 
 ## Ideas
