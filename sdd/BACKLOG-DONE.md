@@ -1,5 +1,11 @@
 # Completed Backlog Items
 
+- [x] **IS-003 -- Service A: HTTP ingress**
+  FastAPI `POST /order`: serializes `OrderRequest` → JSON bytes, uploads to blob store
+  via `shared/blob.py`, builds initial `Envelope` (`step_id="start"`), starts
+  `OrderWorkflow` on Temporal (fire-and-forget). Module-level `_temporal_client` seam
+  for testability. 6 unit tests via `MemoryBackend` + `AsyncMock`.
+
 - [x] **IS-002 -- Blob client wrapper**
   `shared/blob.py`: `upload(data, path) -> BlobRef` and `download(ref) -> bytes`.
   `STORE_URL` = Azure/Azurite connection string; `STORE_CONTAINER` = container name.
