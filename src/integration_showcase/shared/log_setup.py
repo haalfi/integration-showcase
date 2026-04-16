@@ -18,7 +18,8 @@ from integration_showcase.shared.constants import BUSINESS_TX_ID_BAGGAGE_KEY
 
 # Uvicorn configures these loggers with propagate=False before the FastAPI
 # lifespan runs; setup_logging patches them so they emit JSON too.
-_UVICORN_LOGGERS = ("uvicorn", "uvicorn.access", "uvicorn.error")
+# Public so tests and callers can assert on the exact set without hard-coding it.
+UVICORN_LOGGERS = ("uvicorn", "uvicorn.access", "uvicorn.error")
 
 
 class OtelContextFilter(logging.Filter):
@@ -99,7 +100,7 @@ def setup_logging(service_name: str) -> None:
     root.addHandler(handler)
     root.setLevel(logging.INFO)
 
-    for name in _UVICORN_LOGGERS:
+    for name in UVICORN_LOGGERS:
         uv = logging.getLogger(name)
         uv.handlers.clear()
         uv.addHandler(handler)

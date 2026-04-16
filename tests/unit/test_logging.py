@@ -18,7 +18,7 @@ from opentelemetry.context import attach, detach
 
 from integration_showcase.shared.constants import BUSINESS_TX_ID_BAGGAGE_KEY
 from integration_showcase.shared.log_setup import (
-    _UVICORN_LOGGERS,
+    UVICORN_LOGGERS,
     JsonFormatter,
     OtelContextFilter,
     setup_logging,
@@ -223,7 +223,7 @@ def _restore_loggers() -> Generator[None, None, None]:
     root = stdlib_logging.getLogger()
     root_state = (list(root.handlers), root.level)
     uv_states = {}
-    for name in _UVICORN_LOGGERS:
+    for name in UVICORN_LOGGERS:
         uv = stdlib_logging.getLogger(name)
         uv_states[name] = (list(uv.handlers), uv.level, uv.propagate)
     yield
@@ -260,5 +260,29 @@ class TestSetupLogging:
         setup_logging("svc-a")
         setup_logging("svc-b")
         stdlib_logging.getLogger("test").info("once")
+        lines = [ln for ln in capsys.readouterr().out.strip().splitlines() if ln]
+        assert len(lines) == 1
+
+    def test_uvicorn_access_logger_emits_json(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """uvicorn.access should emit JSON through our handler, not uvicorn's default."""
+        setup_logging("svc-x")
+        stdlib_logging.getLogger("uvicorn.access").info("GET /health 200")
+        doc = json.loads(capsys.readouterr().out.strip())
+        assert doc["message"] == "GET /health 200"
+        assert doc["service"] == "svc-x"
+        assert "trace_id" in doc
+
+    def test_uvicorn_loggers_have_propagate_false(self) -> None:
+        """propagate=False prevents double-emit when root also carries the handler."""
+        setup_logging("svc-x")
+        for name in UVICORN_LOGGERS:
+            assert stdlib_logging.getLogger(name).propagate is False
+
+    def test_uvicorn_error_logger_does_not_double_emit(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Each uvicorn log must produce exactly one JSON line (propagate=False guard)."""
+        setup_logging("svc-x")
+        stdlib_logging.getLogger("uvicorn.error").warning("crash")
         lines = [ln for ln in capsys.readouterr().out.strip().splitlines() if ln]
         assert len(lines) == 1
