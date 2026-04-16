@@ -11,8 +11,9 @@
   `find_application_error`, `print_links`, `build_argparser`). Both scripts
   take argparse flags for items/customer_id/URLs. Unhappy exits 0 only when
   the workflow fails with `InsufficientFundsError` (demo-success semantics).
-  Hatch scripts `scenario-happy` / `scenario-unhappy`. 17 new unit tests for
-  the pure helpers.
+  Hatch scripts `scenario-happy` / `scenario-unhappy`. 20 unit tests cover
+  the pure helpers and 8 more cover the `main()` entry points via mocked
+  `post_order` / `await_workflow` stubs.
 
 - [x] **IS-005 -- OTel instrumentation**
   `shared/otel.py`: `setup_tracing(service)` installs TracerProvider + OTLP exporter

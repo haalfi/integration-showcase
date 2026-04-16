@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 import httpx
 from temporalio.client import Client
+from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
 
@@ -92,7 +93,13 @@ async def await_workflow(
     - On failure: ``(None, exc, run_id)`` -- run_id is still returned so callers
       can deep-link to the failed run in the Temporal UI.
     """
-    client = await Client.connect(address, data_converter=pydantic_data_converter)
+    # TracingInterceptor matches Service A / worker client config so any
+    # OTel context on the caller is propagated across the Temporal boundary.
+    client = await Client.connect(
+        address,
+        data_converter=pydantic_data_converter,
+        interceptors=[TracingInterceptor()],
+    )
     handle = client.get_workflow_handle(workflow_id)
 
     run_id: str | None = None
