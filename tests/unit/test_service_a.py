@@ -11,7 +11,7 @@ import json
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import contextmanager
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -41,10 +41,20 @@ def memory_store(monkeypatch: pytest.MonkeyPatch) -> Store:
     return s
 
 
+_MOCK_RUN_ID = "run-mock-abcd1234"
+
+
 @pytest.fixture()
 def temporal_mock(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
-    """Inject a mock Temporal client via the module-level seam."""
+    """Inject a mock Temporal client via the module-level seam.
+
+    ``start_workflow`` is configured to return a stub ``WorkflowHandle`` so
+    the ingress can read ``first_execution_run_id`` and tag the span.
+    """
     mock = AsyncMock()
+    handle = MagicMock()
+    handle.first_execution_run_id = _MOCK_RUN_ID
+    mock.start_workflow.return_value = handle
     monkeypatch.setattr(app_module, "_temporal_client", mock)
     return mock
 
@@ -148,6 +158,8 @@ class TestCreateOrder:
         assert attrs["step_id"] == "start"
         assert attrs["schema_version"] == "1.0"
         assert "payload_ref_sha256" in attrs
+        # run_id is backfilled from the handle returned by start_workflow.
+        assert attrs["run_id"] == _MOCK_RUN_ID
 
     async def test_envelope_traceparent_matches_ingress_trace(
         self,

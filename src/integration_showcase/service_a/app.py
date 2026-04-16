@@ -94,25 +94,29 @@ async def create_order(request: OrderRequest) -> OrderResponse:
 
             envelope = Envelope(
                 workflow_id=workflow_id,
-                run_id="",  # Temporal assigns the run_id; activities backfill via activity.info()
+                run_id="",  # Temporal assigns the run_id; backfilled from the handle below.
                 business_tx_id=business_tx_id,
                 step_id="start",
                 payload_ref=payload_ref,
                 traceparent="",
                 idempotency_key=Envelope.make_idempotency_key(business_tx_id, "start"),
             )
-            set_envelope_span_attrs(span, envelope)
 
             # Serialize current trace context into the envelope so non-Temporal
             # consumers (audit, correlation) see it alongside the Temporal header.
             envelope = inject_carrier_into_envelope(envelope)
 
-            await _temporal_client.start_workflow(
+            handle = await _temporal_client.start_workflow(
                 "OrderWorkflow",
                 envelope,
                 id=workflow_id,
                 task_queue=TASK_QUEUE,
             )
+
+            # Backfill run_id from the handle so the ingress span carries the
+            # real value, not an empty placeholder.
+            envelope = envelope.model_copy(update={"run_id": handle.first_execution_run_id})
+            set_envelope_span_attrs(span, envelope)
     finally:
         detach(token)
 

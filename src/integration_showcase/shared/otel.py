@@ -80,6 +80,13 @@ def inject_carrier_into_envelope(envelope: Envelope) -> Envelope:
     ``dict[str, str]`` (unified with OTel baggage per Q3 design decision):
     every OTel baggage key/value in the current context is mirrored onto
     ``envelope.baggage``.
+
+    Note: Temporal's :class:`TracingInterceptor` carries the trace context
+    through its own headers on the Temporal side -- the envelope carrier
+    fields are intended for *non-Temporal* consumers (audit tooling, blob
+    scanners, cross-system correlation from upstream services) that inspect
+    the envelope out-of-band. :func:`extract_context_from_envelope` is the
+    receiving-side counterpart for those consumers.
     """
     carrier: dict[str, str] = {}
     propagate.inject(carrier)
@@ -98,6 +105,12 @@ def extract_context_from_envelope(envelope: Envelope) -> Context:
 
     Extracts the W3C trace context via the global propagator and seeds
     OTel baggage from ``envelope.baggage`` (unified baggage, Q3).
+
+    Intended for non-Temporal consumers that receive an Envelope
+    out-of-band (e.g. a tool reading persisted workflow payloads) and want
+    to emit spans under the originating trace. Temporal workers do NOT
+    need to call this -- :class:`TracingInterceptor` propagates the
+    context through Temporal headers automatically.
     """
     carrier: dict[str, str] = {}
     if envelope.traceparent:
@@ -111,15 +124,16 @@ def extract_context_from_envelope(envelope: Envelope) -> Context:
 
 
 def instrument_activity(
-    fn: Callable[[Envelope], _R],
-) -> Callable[[Envelope], _R]:
+    fn: Callable[..., _R],
+) -> Callable[..., _R]:
     """Tag the current span with the six required business attributes.
 
     The ``TracingInterceptor`` creates a ``RunActivity:*`` span as the
     current span around every activity invocation; this decorator reads
     the incoming :class:`Envelope` (first positional arg), backfills
     ``run_id`` from :func:`temporalio.activity.info` when the caller
-    didn't supply one, and tags the span.
+    didn't supply one, and tags the span. Any additional positional or
+    keyword arguments are forwarded unchanged to *fn*.
 
     When called outside a Temporal activity context (unit tests that
     invoke the activity directly), the ``activity.info()`` lookup is
@@ -128,10 +142,10 @@ def instrument_activity(
     """
 
     @functools.wraps(fn)
-    def wrapper(envelope: Envelope) -> _R:
+    def wrapper(envelope: Envelope, *args: object, **kwargs: object) -> _R:
         if not envelope.run_id and activity.in_activity():
             envelope = envelope.model_copy(update={"run_id": activity.info().workflow_run_id})
         set_envelope_span_attrs(trace.get_current_span(), envelope)
-        return fn(envelope)
+        return fn(envelope, *args, **kwargs)
 
     return wrapper
