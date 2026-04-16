@@ -59,6 +59,26 @@ Required args positional; behavior flags keyword-only (`*`).
 - Temporal executes compensation in reverse step order.
 - Compensation uses the same `business_tx_id` so all spans are queryable together.
 
+### Compensation idempotency pattern
+
+Invariant #4 says `idempotency_key` "guards all activity side effects against
+Temporal retries." Compensation activities deviate in one controlled way:
+
+- **Forward activities** are keyed on `idempotency_key` (PK + `INSERT OR IGNORE`);
+  retries collide on the PK and no-op.
+- **Compensation activities** must find and reverse the forward activity's
+  effect, but the forward effect was stored under a *different* step's
+  idempotency key. Compensation therefore looks up prior state by
+  `business_tx_id` (which is stable across the whole saga) and achieves
+  idempotency via a state-transition flag (e.g. `released_at IS NULL` ->
+  `released_at = <ts>`, with a post-UPDATE re-read so concurrent retries
+  observe the winning timestamp).
+- Orphan compensation (no prior forward row) inserts a tombstone row keyed
+  on the canonical compensation `idempotency_key` so subsequent retries are
+  PK no-ops. The tombstone blob carries a `"kind": "orphan_tombstone"`
+  discriminator so trace/audit consumers can distinguish it from a real
+  release.
+
 ## remote-store usage
 
 - Blob I/O goes through `remote-store`'s `Store` API -- never raw Azure SDK calls.

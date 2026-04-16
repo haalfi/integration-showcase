@@ -48,6 +48,7 @@ def db_conn(
 
     monkeypatch.setattr(db_module, "_connect_factory", _factory)
     monkeypatch.setenv("SERVICE_D_DB_PATH", str(db_file))
+    db_module._reset_bootstrap_cache()
 
     viewer = sqlite3.connect(str(db_file))
     viewer.row_factory = sqlite3.Row
@@ -82,11 +83,11 @@ def _make_payment_envelope(charge_id: str = "ch-fixture", tx: str = "tx-001") ->
 
 
 class TestDispatchShipment:
-    async def test_writes_shipment_row_and_uploads_confirmation(
+    def test_writes_shipment_row_and_uploads_confirmation(
         self, memory_store: Store, db_conn: sqlite3.Connection
     ) -> None:
         env = _make_payment_envelope(charge_id="ch-abc")
-        ref = await dispatch_shipment(env)
+        ref = dispatch_shipment(env)
 
         row = db_conn.execute(
             "SELECT business_tx_id, shipment_id, charge_id"
@@ -103,12 +104,12 @@ class TestDispatchShipment:
         assert result["shipment_id"] == row["shipment_id"]
         assert result["charge_id"] == "ch-abc"
 
-    async def test_retry_is_idempotent_with_stable_blobref(
+    def test_retry_is_idempotent_with_stable_blobref(
         self, memory_store: Store, db_conn: sqlite3.Connection
     ) -> None:
         env = _make_payment_envelope()
-        first = await dispatch_shipment(env)
-        second = await dispatch_shipment(env)
+        first = dispatch_shipment(env)
+        second = dispatch_shipment(env)
 
         count = db_conn.execute("SELECT COUNT(*) FROM shipments").fetchone()[0]
         assert count == 1

@@ -3,6 +3,11 @@
 Reads the payment receipt blob, dispatches a shipment, persists shipment
 state in a private SQLite DB keyed on ``envelope.idempotency_key``, and
 uploads a confirmation blob.
+
+This activity is ``def`` (not ``async def``) because it does blocking
+I/O; the worker registers it with an ``activity_executor``
+``ThreadPoolExecutor`` so blocking calls don't starve the Temporal event
+loop.
 """
 
 from __future__ import annotations
@@ -40,7 +45,7 @@ def _db_path() -> str:
 
 
 @activity.defn(name="dispatch_shipment")
-async def dispatch_shipment(envelope: Envelope) -> BlobRef:
+def dispatch_shipment(envelope: Envelope) -> BlobRef:
     """Dispatch shipment. Idempotent per ``envelope.idempotency_key``."""
     input_bytes = blob.download(envelope.payload_ref)
     input_data = json.loads(input_bytes)

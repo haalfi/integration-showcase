@@ -6,6 +6,11 @@ persists payment state in a private SQLite DB keyed on
 
 Set ``FORCE_PAYMENT_FAILURE=true`` to trigger ``InsufficientFundsError``,
 which is non-retryable in ``OrderWorkflow`` and drives compensation.
+
+This activity is ``def`` (not ``async def``) because it does blocking
+I/O; the worker registers it with an ``activity_executor``
+``ThreadPoolExecutor`` so blocking calls don't starve the Temporal event
+loop.
 """
 
 from __future__ import annotations
@@ -52,22 +57,23 @@ def _db_path() -> str:
 
 
 @activity.defn(name="charge_payment")
-async def charge_payment(envelope: Envelope) -> BlobRef:
+def charge_payment(envelope: Envelope) -> BlobRef:
     """Charge payment. Idempotent per ``envelope.idempotency_key``.
 
-    The failure check runs before any DB write so a declined charge
-    leaves no partial state. ``InsufficientFundsError`` is the workflow's
-    non-retryable signal to start compensation.
+    The failure check runs before any I/O so a declined charge is a
+    deterministic ``InsufficientFundsError`` regardless of the state of
+    the blob store or the local DB. ``InsufficientFundsError`` is the
+    workflow's non-retryable signal to start compensation.
     """
-    input_bytes = blob.download(envelope.payload_ref)
-    input_data = json.loads(input_bytes)
-    items = list(input_data["items"])
-    amount_cents = len(items) * _PRICE_PER_ITEM_CENTS
-
     if os.environ.get("FORCE_PAYMENT_FAILURE", "").lower() == "true":
         raise InsufficientFundsError(
             f"Payment declined for business_tx_id={envelope.business_tx_id}"
         )
+
+    input_bytes = blob.download(envelope.payload_ref)
+    input_data = json.loads(input_bytes)
+    items = list(input_data["items"])
+    amount_cents = len(items) * _PRICE_PER_ITEM_CENTS
 
     with db.connect(_db_path()) as conn:
         conn.execute(_DDL)

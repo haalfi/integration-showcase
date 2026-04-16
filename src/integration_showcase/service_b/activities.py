@@ -5,6 +5,11 @@ Side-effect state lives in a private SQLite database keyed by
 blob's contents are reconstructed from the persisted row, which keeps the
 returned ``BlobRef.sha256`` stable across retries even though the
 generated reservation_id is a fresh uuid on the first attempt.
+
+These activities are ``def`` (not ``async def``) because they do blocking
+I/O (blob HTTP + SQLite). The worker registers them with an
+``activity_executor`` ``ThreadPoolExecutor`` so blocking calls don't
+starve the Temporal event loop.
 """
 
 from __future__ import annotations
@@ -43,7 +48,7 @@ def _db_path() -> str:
 
 
 @activity.defn(name="reserve_inventory")
-async def reserve_inventory(envelope: Envelope) -> BlobRef:
+def reserve_inventory(envelope: Envelope) -> BlobRef:
     """Reserve inventory for the order. Idempotent per ``envelope.idempotency_key``.
 
     Downloads the input payload from blob storage, inserts (or fetches on
@@ -93,7 +98,7 @@ async def reserve_inventory(envelope: Envelope) -> BlobRef:
 
 
 @activity.defn(name="compensate_reserve_inventory")
-async def compensate_reserve_inventory(envelope: Envelope) -> BlobRef:
+def compensate_reserve_inventory(envelope: Envelope) -> BlobRef:
     """Release the inventory reservation for ``envelope.business_tx_id``.
 
     The workflow advances the envelope to ``step_id="compensate.reserve-inventory"``
@@ -103,12 +108,18 @@ async def compensate_reserve_inventory(envelope: Envelope) -> BlobRef:
 
     Lookup of the reservation itself uses ``business_tx_id`` because the
     original reservation was stored under the forward-step idempotency key
-    (e.g. ``"{business_tx_id}:start:1.0"``). Idempotent: once ``released_at``
-    is set, subsequent calls preserve it.
+    (e.g. ``"{business_tx_id}:start:1.0"``). See DESIGN.md §Compensation
+    rules for the spec carve-out that permits this. Idempotent under
+    concurrent retries: the ``UPDATE ... WHERE released_at IS NULL``
+    serializes via SQLite's row locks, and the post-UPDATE re-read
+    returns the winning ``released_at`` so every caller produces identical
+    result bytes.
 
     Edge case: if no prior reservation row exists (orphan compensation),
     a tombstone row is inserted under ``envelope.idempotency_key`` so the
-    same-named retry no-ops and returns the same canonical blob.
+    same-named retry no-ops and returns the same canonical blob. The blob
+    carries ``"kind": "orphan_tombstone"`` to distinguish it from a real
+    release in trace/audit consumers.
     """
     with db.connect(_db_path()) as conn:
         conn.execute(_DDL)
@@ -137,24 +148,35 @@ async def compensate_reserve_inventory(envelope: Envelope) -> BlobRef:
                     released_at,
                 ),
             )
-        elif row["released_at"] is None:
-            reservation_id = row["reservation_id"]
-            items = json.loads(row["items"])
-            released_at = datetime.now(UTC).isoformat()
-            conn.execute(
-                "UPDATE inventory_reservations SET released_at = ?"
-                " WHERE business_tx_id = ? AND released_at IS NULL",
-                (released_at, envelope.business_tx_id),
-            )
+            kind = "orphan_tombstone"
         else:
             reservation_id = row["reservation_id"]
             items = json.loads(row["items"])
-            released_at = row["released_at"]
+            if row["released_at"] is None:
+                conn.execute(
+                    "UPDATE inventory_reservations SET released_at = ?"
+                    " WHERE business_tx_id = ? AND released_at IS NULL",
+                    (datetime.now(UTC).isoformat(), envelope.business_tx_id),
+                )
+            # Re-read under the same transaction to pick up whichever
+            # timestamp won a concurrent-compensation race; this keeps all
+            # callers' result bytes (and thus BlobRef.sha256) identical.
+            persisted = conn.execute(
+                "SELECT released_at FROM inventory_reservations"
+                " WHERE business_tx_id = ? ORDER BY reserved_at DESC LIMIT 1",
+                (envelope.business_tx_id,),
+            ).fetchone()
+            released_at = persisted["released_at"]
+            # An earlier retry may have written an orphan tombstone; preserve
+            # its ``kind`` so a second orphan-compensation call produces the
+            # same canonical blob as the first.
+            kind = "orphan_tombstone" if reservation_id == "orphan" else "released"
 
     result = {
         "business_tx_id": envelope.business_tx_id,
         "reservation_id": reservation_id,
         "items": items,
+        "kind": kind,
         "released": True,
         "released_at": released_at,
     }

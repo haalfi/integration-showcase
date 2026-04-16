@@ -13,6 +13,9 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from integration_showcase.shared.envelope import BlobRef, Envelope
+    from integration_showcase.workflow.envelopes import (
+        compensate_reserve_inventory_envelope,
+    )
 
 
 _DEFAULT_RETRY = RetryPolicy(
@@ -56,12 +59,11 @@ class OrderWorkflow:
                 retry_policy=_PAYMENT_RETRY,
             )
         except Exception:
-            # DESIGN.md §Compensation rules: compensation step_id must be
-            # "compensate.{original_step_id}". Advance the envelope so the
-            # compensation activity gets a canonical idempotency_key
-            # ("{tx}:compensate.reserve-inventory:{schema}").
-            compensate_envelope = inventory_envelope.advance(
-                "compensate.reserve-inventory", inventory_ref
+            # Single source of truth for compensation envelope construction
+            # (DESIGN.md §Compensation rules); the tests import the same
+            # helper so the idempotency_key contract cannot drift.
+            compensate_envelope = compensate_reserve_inventory_envelope(
+                inventory_envelope, inventory_ref
             )
             await workflow.execute_activity(
                 "compensate_reserve_inventory",

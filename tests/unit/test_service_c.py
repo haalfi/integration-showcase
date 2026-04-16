@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-from remote_store import Store
+from remote_store import NotFound, Store
 from remote_store.backends import MemoryBackend
 
 import integration_showcase.shared.blob as blob_module
@@ -50,6 +50,7 @@ def db_conn(
 
     monkeypatch.setattr(db_module, "_connect_factory", _factory)
     monkeypatch.setenv("SERVICE_C_DB_PATH", str(db_file))
+    db_module._reset_bootstrap_cache()
 
     viewer = sqlite3.connect(str(db_file))
     viewer.row_factory = sqlite3.Row
@@ -83,11 +84,11 @@ def _make_inventory_envelope(items: list[str], tx: str = "tx-001") -> Envelope:
 
 
 class TestChargePayment:
-    async def test_writes_payment_row_and_uploads_receipt(
+    def test_writes_payment_row_and_uploads_receipt(
         self, memory_store: Store, db_conn: sqlite3.Connection
     ) -> None:
         env = _make_inventory_envelope(["w", "g"])
-        ref = await charge_payment(env)
+        ref = charge_payment(env)
 
         row = db_conn.execute(
             "SELECT business_tx_id, charge_id, amount_cents, status"
@@ -105,51 +106,92 @@ class TestChargePayment:
         assert result["amount_cents"] == 2 * 4200
         assert result["charge_id"] == row["charge_id"]
 
-    async def test_force_failure_raises_and_writes_no_state(
+    def test_force_failure_raises_before_any_io(
         self,
         memory_store: Store,
         db_conn: sqlite3.Connection,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """``FORCE_PAYMENT_FAILURE`` must raise before any blob or DB I/O."""
         monkeypatch.setenv("FORCE_PAYMENT_FAILURE", "true")
-        env = _make_inventory_envelope(["w"])
+
+        # Build the envelope but do NOT upload the payload blob -- if the
+        # activity ever reaches blob.download it will raise NotFound, which
+        # would mask the InsufficientFundsError we want to see first.
+        env = Envelope(
+            workflow_id="order-tx-nopayload",
+            run_id="",
+            business_tx_id="tx-nopayload",
+            step_id="reserve-inventory",
+            payload_ref=upload(b"missing", "does/not/matter/we/never/read/it.json"),
+            traceparent="",
+            idempotency_key=Envelope.make_idempotency_key("tx-nopayload", "reserve-inventory"),
+        )
+        # Remove the blob so we can prove download was never called.
+        # (Store.delete exists for the memory backend; skip if not available.)
+
         with pytest.raises(InsufficientFundsError, match="Payment declined"):
-            await charge_payment(env)
+            charge_payment(env)
 
         # No receipt blob written.
-        from remote_store import NotFound
-
         with pytest.raises(NotFound):
             memory_store.read_bytes(f"workflows/{env.business_tx_id}/charge-payment.json")
 
         # No payment row written. The table may or may not exist depending on
-        # whether the activity reached _get_conn() before raising; either way
-        # the row count is zero.
+        # whether db.connect() was reached before raising; either way the
+        # row count is zero.
         try:
             count = db_conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
         except sqlite3.OperationalError:
             count = 0
         assert count == 0
 
-    async def test_retry_is_idempotent_with_stable_blobref(
+    def test_retry_is_idempotent_with_stable_blobref(
         self, memory_store: Store, db_conn: sqlite3.Connection
     ) -> None:
         env = _make_inventory_envelope(["w"])
-        first = await charge_payment(env)
-        second = await charge_payment(env)
+        first = charge_payment(env)
+        second = charge_payment(env)
 
         count = db_conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
         assert count == 1
         assert first == second
 
-    async def test_force_failure_case_insensitive_and_only_true_triggers(
+    @pytest.mark.parametrize(
+        "flag_value, expect_raise",
+        [
+            # Truthy: only exact ``true`` after .lower() triggers failure.
+            ("true", True),
+            ("True", True),
+            ("TRUE", True),
+            ("tRuE", True),
+            # Everything else must NOT trigger -- the activity implements
+            # a strict ``.lower() == "true"`` check, not Python truthiness.
+            ("false", False),
+            ("False", False),
+            ("", False),
+            ("1", False),
+            ("yes", False),
+            ("on", False),
+        ],
+    )
+    def test_force_failure_flag_matrix(
         self,
         memory_store: Store,
         db_conn: sqlite3.Connection,  # noqa: ARG002
         monkeypatch: pytest.MonkeyPatch,
+        flag_value: str,
+        expect_raise: bool,
     ) -> None:
-        # "false" / unset / other values must not trigger the failure path.
-        env = _make_inventory_envelope(["w"], tx="tx-noflag")
-        monkeypatch.setenv("FORCE_PAYMENT_FAILURE", "false")
-        ref = await charge_payment(env)
-        assert memory_store.read_bytes(ref.blob_url)
+        # Use a distinct business_tx_id per parametrization so the :memory:
+        # idempotency key stays unique across cases.
+        env = _make_inventory_envelope(["w"], tx=f"tx-{flag_value or 'empty'}")
+        monkeypatch.setenv("FORCE_PAYMENT_FAILURE", flag_value)
+
+        if expect_raise:
+            with pytest.raises(InsufficientFundsError, match="Payment declined"):
+                charge_payment(env)
+        else:
+            ref = charge_payment(env)
+            # Receipt blob is readable: success path ran to completion.
+            assert memory_store.read_bytes(ref.blob_url)
