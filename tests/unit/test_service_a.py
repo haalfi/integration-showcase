@@ -167,7 +167,7 @@ class TestCreateOrder:
         temporal_mock: AsyncMock,
         spans: InMemorySpanExporter,
     ) -> None:
-        await client.post("/order", json=_VALID_ORDER)
+        response = await client.post("/order", json=_VALID_ORDER)
 
         ingress_spans = [
             s for s in spans.get_finished_spans() if s.name == "http.ingress POST /order"
@@ -178,6 +178,11 @@ class TestCreateOrder:
         envelope: Envelope = temporal_mock.start_workflow.call_args[0][1]
         assert envelope.traceparent != ""
         assert envelope.baggage.get("business_tx_id") == envelope.business_tx_id
+
+        # OrderResponse surfaces the ingress traceparent so scenario clients
+        # can deep-link into Jaeger without parsing server logs.
+        body = response.json()
+        assert body["traceparent"] == envelope.traceparent
 
         # Extract the carrier and verify trace_id continuity across the boundary.
         ctx = extract_context_from_envelope(envelope)

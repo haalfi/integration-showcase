@@ -63,6 +63,8 @@ class OrderRequest(BaseModel):
 class OrderResponse(BaseModel):
     business_tx_id: str
     workflow_id: str
+    # W3C traceparent of the ingress span; clients parse trace_id for Jaeger deep-links.
+    traceparent: str
 
 
 @app.post("/order", response_model=OrderResponse)
@@ -120,4 +122,8 @@ async def create_order(request: OrderRequest) -> OrderResponse:
     finally:
         detach(token)
 
-    return OrderResponse(business_tx_id=business_tx_id, workflow_id=workflow_id)
+    return OrderResponse(
+        business_tx_id=business_tx_id,
+        workflow_id=workflow_id,
+        traceparent=envelope.traceparent,
+    )

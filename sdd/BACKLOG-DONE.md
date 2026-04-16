@@ -1,5 +1,20 @@
 # Completed Backlog Items
 
+- [x] **IS-006 -- Scenario scripts**
+  `scenarios/run_happy.py` and `scenarios/run_unhappy.py` POST to Service A,
+  await workflow completion via a direct Temporal client
+  (`pydantic_data_converter`), and print deep-links: Jaeger trace URL parsed
+  from the new `OrderResponse.traceparent` field; Temporal UI URL built from
+  `workflow_id` + `run_id` (fetched via `handle.describe()`). Shared helpers
+  live in `scenarios/_common.py` (`parse_trace_id`, `jaeger_trace_url`,
+  `jaeger_search_url`, `temporal_workflow_url`, `post_order`, `await_workflow`,
+  `find_application_error`, `print_links`, `build_argparser`). Both scripts
+  take argparse flags for items/customer_id/URLs. Unhappy exits 0 only when
+  the workflow fails with `InsufficientFundsError` (demo-success semantics).
+  Hatch scripts `scenario-happy` / `scenario-unhappy`. 20 unit tests cover
+  the pure helpers and 8 more cover the `main()` entry points via mocked
+  `post_order` / `await_workflow` stubs.
+
 - [x] **IS-005 -- OTel instrumentation**
   `shared/otel.py`: `setup_tracing(service)` installs TracerProvider + OTLP exporter
   + W3C TraceContext/Baggage composite propagator; `set_envelope_span_attrs` tags a
