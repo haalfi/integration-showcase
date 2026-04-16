@@ -201,7 +201,10 @@ async def test_happy_path_routes_each_activity_to_its_service_queue() -> None:
                     task_queue=TASK_QUEUE,
                     workflows=[OrderWorkflow],
                     activities=[
-                        _poison_reserve, _poison_charge, _poison_dispatch, _poison_compensate
+                        _poison_reserve,
+                        _poison_charge,
+                        _poison_dispatch,
+                        _poison_compensate,
                     ],
                     activity_executor=executor,
                 ),
