@@ -23,6 +23,7 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from temporalio import activity
 
 from integration_showcase.shared.envelope import Envelope
+from integration_showcase.shared.log_setup import setup_logging
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -55,6 +56,7 @@ def setup_tracing(service_name: str) -> TracerProvider:
     propagate.set_global_textmap(
         CompositePropagator([TraceContextTextMapPropagator(), W3CBaggagePropagator()])
     )
+    setup_logging(effective_name)
     return provider
 
 

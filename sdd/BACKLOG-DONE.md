@@ -1,5 +1,18 @@
 # Completed Backlog Items
 
+- [x] **IS-005b -- Log correlation**
+  `shared/log_setup.py`: `OtelContextFilter` reads `trace.get_current_span().get_span_context()`
+  and `baggage.get_baggage("business_tx_id")` and injects `trace_id` (32-char W3C hex),
+  `span_id` (16-char hex), and `business_tx_id` as `LogRecord` extras; `JsonFormatter`
+  emits them as top-level fields (alongside `timestamp`, `level`, `service`, `logger`,
+  `message`) for Loki/ES-friendly querying. `setup_logging(service_name)` replaces root
+  logger handlers with a stdout `StreamHandler` guarded by the filter. Called automatically
+  from `setup_tracing` so all five service entry points (service-a lifespan, workers B/C/D,
+  workflow worker) get structured log correlation with no additional callsites. 33 new unit
+  tests cover filter behaviour inside/outside spans, baggage injection, JSON field completeness,
+  trace_id format validation, and setup_logging idempotency. Full suite 137 tests @ 92.67%
+  coverage; log_setup.py at 100%.
+
 - [x] **IS-006 -- Scenario scripts**
   `scenarios/run_happy.py` and `scenarios/run_unhappy.py` POST to Service A,
   await workflow completion via a direct Temporal client
