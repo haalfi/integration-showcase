@@ -333,46 +333,23 @@ im Tracing-Backend rekonstruieren [^otel-corr].
 
 ### Prozess-Hauptbuch (Temporal)
 
-- [^temporal-err]:
-      Temporal — _Error handling in distributed systems_.
-      <https://temporal.io/blog/error-handling-in-distributed-systems>
-- [^temporal-idem]:
-      Temporal — _Idempotency and durable execution_.
-      <https://temporal.io/blog/idempotency-and-durable-execution>
-- [^temporal-claim]:
-      Temporal AI Cookbook — _Claim-check pattern (Python)_.
-      <https://docs.temporal.io/ai-cookbook/claim-check-pattern-python>
-- [^temporal-ext]:
-      Temporal Docs — _External storage for large payloads_.
-      <https://docs.temporal.io/external-storage>
-- [^saga]:
-      Federico Bevione (dev.to) — _Transactions in Microservices,
-      Part 3: Saga Pattern with Orchestration and Temporal.io_.
-      <https://dev.to/federico_bevione/transactions-in-microservices-part-3-saga-pattern-with-orchestration-and-temporalio-3e17>
+- Temporal — [_Error handling in distributed systems_](https://temporal.io/blog/error-handling-in-distributed-systems)
+- Temporal — [_Idempotency and durable execution_](https://temporal.io/blog/idempotency-and-durable-execution)
+- Temporal AI Cookbook — [_Claim-check pattern (Python)_](https://docs.temporal.io/ai-cookbook/claim-check-pattern-python)
+- Temporal Docs — [_External storage for large payloads_](https://docs.temporal.io/external-storage)
+- Federico Bevione (dev.to) — [_Transactions in Microservices, Part 3: Saga Pattern with Orchestration and Temporal.io_](https://dev.to/federico_bevione/transactions-in-microservices-part-3-saga-pattern-with-orchestration-and-temporalio-3e17)
 
 ### Payload-Tresor (Azure Blob Storage)
 
-- [^azure-lp]:
-      Microsoft Learn — _Durable Task Scheduler: large payloads_.
-      <https://learn.microsoft.com/en-us/azure/durable-task/scheduler/durable-task-scheduler-large-payloads>
-- [^azure-immut]:
-      Microsoft Learn — _Immutable storage for Azure Blob Storage (Overview)_.
-      <https://learn.microsoft.com/en-us/azure/storage/blobs/immutable-storage-overview>
-- [^azure-ret]:
-      OneUptime — _How to configure Azure Blob Storage retention policies for compliance_.
-      <https://oneuptime.com/blog/post/2026-02-16-how-to-configure-azure-blob-storage-retention-policies-for-compliance/view>
+- Microsoft Learn — [_Durable Task Scheduler: large payloads_](https://learn.microsoft.com/en-us/azure/durable-task/scheduler/durable-task-scheduler-large-payloads)
+- Microsoft Learn — [_Immutable storage for Azure Blob Storage (Overview)_](https://learn.microsoft.com/en-us/azure/storage/blobs/immutable-storage-overview)
+- OneUptime — [_How to configure Azure Blob Storage retention policies for compliance_](https://oneuptime.com/blog/post/2026-02-16-how-to-configure-azure-blob-storage-retention-policies-for-compliance/view)
 
 ### Nervensystem (OpenTelemetry)
 
-- [^otel-temporal]:
-      OneUptime — _Instrument Temporal.io workflows with OpenTelemetry_.
-      <https://oneuptime.com/blog/post/2026-02-06-instrument-temporal-io-workflows-opentelemetry/view>
-- [^otel-corr]:
-      OneUptime — _OTel request-scoped correlation IDs_.
-      <https://oneuptime.com/blog/post/2026-02-06-otel-request-scoped-correlation-ids/view>
-- [^otel-prop]:
-      OneUptime — _Distributed tracing context propagation_.
-      <https://oneuptime.com/blog/post/2026-02-02-distributed-tracing-context-propagation/view>
+- OneUptime — [_Instrument Temporal.io workflows with OpenTelemetry_](https://oneuptime.com/blog/post/2026-02-06-instrument-temporal-io-workflows-opentelemetry/view)
+- OneUptime — [_OTel request-scoped correlation IDs_](https://oneuptime.com/blog/post/2026-02-06-otel-request-scoped-correlation-ids/view)
+- OneUptime — [_Distributed tracing context propagation_](https://oneuptime.com/blog/post/2026-02-02-distributed-tracing-context-propagation/view)
 
 [^temporal-err]: <https://temporal.io/blog/error-handling-in-distributed-systems>
 
