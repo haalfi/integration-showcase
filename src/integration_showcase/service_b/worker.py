@@ -24,7 +24,7 @@ from integration_showcase.service_b.activities import (
     compensate_reserve_inventory,
     reserve_inventory,
 )
-from integration_showcase.shared.constants import TASK_QUEUE
+from integration_showcase.shared.constants import TASK_QUEUE_B
 from integration_showcase.shared.otel import setup_tracing
 
 _ACTIVITY_EXECUTOR_MAX_WORKERS = 10
@@ -41,7 +41,7 @@ async def main() -> None:
     with ThreadPoolExecutor(max_workers=_ACTIVITY_EXECUTOR_MAX_WORKERS) as executor:
         worker = Worker(
             client,
-            task_queue=TASK_QUEUE,
+            task_queue=TASK_QUEUE_B,
             activities=[reserve_inventory, compensate_reserve_inventory],
             activity_executor=executor,
         )

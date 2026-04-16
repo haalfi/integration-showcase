@@ -4,8 +4,9 @@ Run with::
 
     python -m integration_showcase.workflow.worker
 
-Activities run in the per-service workers (service_b/c/d). All workers
-poll the same task queue (``integration_showcase.shared.constants.TASK_QUEUE``).
+The workflow worker polls ``TASK_QUEUE``; per-service workers poll
+``TASK_QUEUE_B/C/D`` and the workflow dispatches each activity to the
+owning service's queue (BUG-001).
 """
 
 from __future__ import annotations

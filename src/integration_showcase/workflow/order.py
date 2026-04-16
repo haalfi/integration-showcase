@@ -12,6 +12,11 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from integration_showcase.shared.constants import (
+        TASK_QUEUE_B,
+        TASK_QUEUE_C,
+        TASK_QUEUE_D,
+    )
     from integration_showcase.shared.envelope import BlobRef, Envelope
     from integration_showcase.workflow.envelopes import (
         compensate_reserve_inventory_envelope,
@@ -52,6 +57,7 @@ class OrderWorkflow:
             envelope,
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=_DEFAULT_RETRY,
+            task_queue=TASK_QUEUE_B,
         )
         inventory_envelope = envelope.advance("reserve-inventory", inventory_ref)
 
@@ -62,6 +68,7 @@ class OrderWorkflow:
                 inventory_envelope,
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=_PAYMENT_RETRY,
+                task_queue=TASK_QUEUE_C,
             )
         except Exception:
             # Single source of truth for compensation envelope construction
@@ -75,6 +82,7 @@ class OrderWorkflow:
                 compensate_envelope,
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=_COMPENSATE_RETRY,
+                task_queue=TASK_QUEUE_B,
             )
             raise
 
@@ -86,6 +94,7 @@ class OrderWorkflow:
             payment_envelope,
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=_DEFAULT_RETRY,
+            task_queue=TASK_QUEUE_D,
         )
 
         return envelope.business_tx_id
