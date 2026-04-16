@@ -1,5 +1,18 @@
 # Completed Backlog Items
 
+- [x] **BUG-001 -- Activity mis-routing: all activities dispatched to TASK_QUEUE**
+  All four `execute_activity` calls in `OrderWorkflow.run` omitted `task_queue=`, so
+  Temporal dispatched every activity to the workflow's default queue (`TASK_QUEUE`).
+  When multiple workers polled the same queue, the wrong worker (not registered for
+  that activity) received the task, failed the attempt, and consumed the retry budget.
+  The happy-path scenario had never been run end-to-end before; the bug was latent since
+  IS-004. Fix: added per-service queue constants (`TASK_QUEUE_B/C/D`) to `constants.py`,
+  threaded `task_queue=` into every `execute_activity` call in the workflow, and updated
+  each service worker to poll its own dedicated queue. Regression tests:
+  `tests/unit/test_workflow_routing.py` — 6 structural (AST) tests verify each call uses
+  the correct constant; 1 behavioral test runs the workflow in a time-skipping
+  `WorkflowEnvironment` with poison stubs on `TASK_QUEUE` and real stubs on B/C/D.
+
 - [x] **BK-001 -- Explicit Temporal Client lifecycle in Service A**
   Investigation result: `temporalio.client.Client` intentionally exposes no `close()` method
   (confirmed via SDK docs and context7 — "Clients do not have an explicit 'close' method").

@@ -21,7 +21,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
 from integration_showcase.service_c.activities import charge_payment
-from integration_showcase.shared.constants import TASK_QUEUE
+from integration_showcase.shared.constants import TASK_QUEUE_C
 from integration_showcase.shared.otel import setup_tracing
 
 _ACTIVITY_EXECUTOR_MAX_WORKERS = 10
@@ -38,7 +38,7 @@ async def main() -> None:
     with ThreadPoolExecutor(max_workers=_ACTIVITY_EXECUTOR_MAX_WORKERS) as executor:
         worker = Worker(
             client,
-            task_queue=TASK_QUEUE,
+            task_queue=TASK_QUEUE_C,
             activities=[charge_payment],
             activity_executor=executor,
         )
