@@ -14,7 +14,7 @@ Damit entstehen drei klar getrennte Zustandsschichten:
 | Schicht        | Träger             | Inhalt                                                                              |
 | -------------- | ------------------ | ----------------------------------------------------------------------------------- |
 | Orchestrierung | Temporal           | Workflow-/Run-IDs, Activities, Retries, Kompensationen, Event History               |
-| Payload        | Azure Blob Storage | Unveränderliche Datenblobs, Versionen, Metadaten (Claim-Check-Pattern)              |
+| Payload        | Azure Blob Storage | Inhaltsadressierte Datenblobs (SHA-256-verifiziert), Metadaten (Claim-Check-Pattern) |
 | Observability  | OpenTelemetry      | Traces, Spans, Logs, Business-Korrelations-IDs                                      |
 
 Diese Trennung hält die Temporal-History schlank, erlaubt beliebig große
@@ -41,7 +41,7 @@ flowchart LR
     end
 
     subgraph Blob["Azure Blob Storage (Payload-Tresor)"]
-        B1[("input.json<br/>versioned + immutable")]
+        B1[("input.json<br/>inhaltsadressiert (SHA-256)")]
         B2[("inventory-result.json")]
         B3[("payment-receipt.json")]
     end
@@ -85,9 +85,9 @@ Nutzdaten selbst:
   "step_id": "reserve-inventory",
   "payload_ref": {
     "blob_url": "https://acct.blob.core.windows.net/workflows/tx-789/input.json",
+    "sha256": "…",
     "etag": "\"0x8DB...\"",
-    "version_id": "2026-04-15T12:34:56.0000000Z",
-    "sha256": "…"
+    "version_id": "2026-04-15T12:34:56.0000000Z"
   },
   "traceparent": "00-<trace-id>-<span-id>-01",
   "baggage": { "correlation.id": "tx-789" },
@@ -107,6 +107,16 @@ Nutzdaten selbst:
    mit demselben `business_tx_id` und einer ggf. neuen `payload_ref`.
 4. `idempotency_key` schützt gegen Temporal-Retries (Activities dürfen
    mehrfach ausgeführt werden).
+
+**Pflicht- vs. optionale Felder in `payload_ref`:**
+
+- `blob_url` und `sha256` sind **pflicht**. `sha256` ist die einzige
+  Integritätsgarantie, die backend-unabhängig gilt: jeder Konsument
+  kann das geladene Blob lokal verifizieren.
+- `etag` und `version_id` sind **optional und backend-abhängig**. Sie
+  werden nur dann gesetzt, wenn der konkrete Storage-Backend (z. B.
+  Azure Blob Storage mit aktivierter Versionierung) sie liefert. Bei
+  einem In-Memory-Backend bleiben sie leer.
 
 ---
 
@@ -129,8 +139,9 @@ sequenceDiagram
     U->>A: POST /order (Payload)
     A->>A: generate business_tx_id=tx-789
     A->>AB: PUT workflows/tx-789/input.json
-    AB-->>A: etag, version_id
+    AB-->>A: sha256 (+ etag/version_id falls verfügbar)
     A->>T: StartWorkflow(order-123, envelope)
+    A-->>U: 202 Accepted {business_tx_id, workflow_id, traceparent}
     A-->>O: span "ingress"
 
     T->>B: Activity reserve-inventory(envelope)
@@ -153,9 +164,20 @@ sequenceDiagram
     D-->>T: Result(OK)
     D-->>O: span "dispatch-shipment"
 
-    T-->>A: Workflow completed
-    A-->>U: 200 OK {tx-789}
+    Note over U,T: Status-Polling läuft entkoppelt vom HTTP-Request<br/>über einen direkten Temporal-Client.
+    U->>T: get_workflow_handle(workflow_id).result()
+    T-->>U: Workflow-Result (oder Exception)
 ```
+
+**Status-Polling.** Der HTTP-Aufruf an Service A endet mit `202 Accepted`,
+sobald der Workflow gestartet ist. Den Endzustand liest der Aufrufer
+**direkt am Temporal-Cluster** ab (`get_workflow_handle(workflow_id).result()`),
+nicht über einen weiteren HTTP-Aufruf an Service A. Das hält Service A
+zustandslos und entkoppelt die Wartezeit vom HTTP-Request. Im Showcase
+implementieren das die Szenario-Skripte
+(`scenarios/_common.py::await_workflow`); ein Produktivsystem würde an
+dieser Stelle einen Status-Endpunkt, ein Webhook-Callback oder einen
+Event-Stream anbieten (siehe §9 Produktionshärtung).
 
 ### 4.2 Span-Baum (Happy Path)
 
@@ -187,7 +209,7 @@ flowchart TD
 ```
 
 **Alle Spans** tragen als Attribute mindestens:
-`business_tx_id`, `workflow_id`, `run_id`, `step_id`, `payload_ref.etag`,
+`business_tx_id`, `workflow_id`, `run_id`, `step_id`, `payload_ref.sha256`,
 `schema_version`.
 
 ---
@@ -301,7 +323,10 @@ im Tracing-Backend rekonstruieren.
       `schema_version`.
 - [ ] Activities sind **idempotent** (Temporal darf wiederholen) –
       `idempotency_key` in jeder Fachoperation prüfen.
-- [ ] Hohe Kardinalitäts-IDs **nicht** in Metrik-Labels – nur Traces/Logs.
+- [ ] **Optional / Erweiterung:** Sobald Metriken eingeführt werden,
+      gilt die Cardinality-Regel: hohe Kardinalitäts-IDs (`business_tx_id`,
+      `workflow_id`, `run_id`) gehören **nicht** in Metrik-Labels – nur in
+      Traces und Logs. Im Showcase aktuell nicht umgesetzt; siehe §9.
 - [ ] Jeder persistierte Seiteneffekt ist **genau einem** Workflow-Schritt
       **und einer** Blob-Referenz zuordenbar.
 
@@ -348,3 +373,70 @@ im Tracing-Backend rekonstruieren.
 - OpenTelemetry – [_Context Propagation_](https://opentelemetry.io/docs/concepts/context-propagation/)
 - W3C – [_Propagation format for distributed context: Baggage_](https://www.w3.org/TR/baggage/)
 - OneUptime – [_Instrument Temporal.io workflows with OpenTelemetry_](https://oneuptime.com/blog/post/2026-02-06-instrument-temporal-io-workflows-opentelemetry/view) _(praktisches Beispiel)_
+
+---
+
+## 9. Produktionshärtung
+
+Der Showcase demonstriert die **Architektur-Invarianten** (Envelope, Claim
+Check, Trace-Propagation, Saga-Kompensation). Die folgenden Themen sind
+für einen Produktivbetrieb zwingend, würden den Demo-Aufbau aber
+unverhältnismäßig vergrößern und sind daher bewusst ausgegrenzt. Sie
+gehören in einen separaten Hardening-Track.
+
+### 9.1 OTel Collector statt direkter Exporter
+
+Der Showcase exportiert OTLP **direkt an Jaeger** (`OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317`).
+Im Produktivbetrieb gehört zwischen Service und Backend ein
+OpenTelemetry Collector – für Batching, Sampling, Re-Routing,
+Anreicherung (z. B. Resource-Attribute aus Kubernetes-Downward-API) und
+Backend-Failover. Eine fertige Collector-Konfiguration liegt im
+Repository (`otel-collector-config.yaml`); aktiviert wird sie über das
+Backlog-Item `BK-ext-collector`.
+
+### 9.2 OTLP-Logs statt stdout-JSON
+
+Logs werden derzeit als strukturiertes JSON auf stdout geschrieben und
+landen ausschließlich in den Container-Logs. Korrelation mit Traces ist
+nur über `trace_id`/`span_id`-Suche im Log-Aggregator möglich. Ein
+OTLP-Log-Exporter liefert Logs am gleichen Pipeline-Endpunkt wie Traces
+und erlaubt im Tracing-Backend echtes "Logs in Span"-Drilldown.
+
+### 9.3 Metriken & Cardinality-Disziplin
+
+Der Showcase exportiert keine Metriken; die Cardinality-Regel aus §6 ist
+eine Vorgabe für ihre spätere Einführung: hoch-kardinale Korrelations-IDs
+(`business_tx_id`, `workflow_id`, `run_id`) bleiben in Traces und Logs.
+In Metriken erscheinen nur niedrig-kardinale Dimensionen wie `outcome`,
+`step_id`, `service`. Erste Kandidaten: ein Counter
+`saga_completed_total{outcome}` und ein Histogramm
+`saga_duration_seconds`.
+
+### 9.4 Blob-Immutability & Versionierung
+
+Der Showcase schreibt Blobs einmal und liest sie erneut – aber **erzwingt**
+keine Unveränderlichkeit. In Compliance-Umgebungen (Audit, Finanz,
+Gesundheit) gehören Workflow-Container hinter:
+
+- **Immutability-Policies (WORM)** mit `immutabilityPolicyMode = Locked`
+  und definierter Retention,
+- **Legal Holds** für laufende Rechtsverfahren,
+- **Blob-Versionierung** auf Account-Ebene, sodass Überschreibversuche
+  als neue Version landen und der ursprüngliche Blob unverändert bleibt
+  (liefert dann auch die `version_id` im Envelope),
+- **Soft Delete** für Container und Blobs als zusätzliche Sicherung
+  gegen versehentliches Löschen.
+
+Die Integritätsgarantie des Showcase bleibt der `sha256` im Envelope –
+unabhängig davon, ob das Storage-Backend zusätzlich WORM erzwingt.
+
+### 9.5 Status-Endpunkt statt Direkt-Polling am Cluster
+
+Im Showcase pollen die Szenario-Skripte den Workflow-Status **direkt am
+Temporal-Cluster** (siehe §4.1 "Status-Polling"). Externe Clients dürfen
+in einem Produktivsystem nicht direkt mit dem Orchestrator sprechen.
+Stattdessen exponiert Service A einen Status-Endpunkt
+(`GET /order/{business_tx_id}`), der intern `describe()` aufruft und das
+Ergebnis in eine fachliche Repräsentation übersetzt. Alternativen:
+Webhook-Callback, Server-Sent Events, oder ein Event-Stream (Kafka,
+Service Bus) für Domain-Ereignisse.

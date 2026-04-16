@@ -1,5 +1,27 @@
 # Completed Backlog Items
 
+- [x] **IS-007 -- Concept adaptation pass**
+  Aligned `sdd/research/research-temporal-azure-otel-orchestration.md` with what the
+  showcase actually demonstrates and split production-only concerns into a new section.
+  - §2: replaced "unveränderlich" with "inhaltsadressiert (SHA-256-verifiziert)" in both
+    the layer table and the architecture diagram.
+  - §3: reordered `payload_ref` so `sha256` leads; added a "Pflicht- vs. optionale Felder"
+    paragraph that marks `etag`/`version_id` as backend-dependent and names `sha256` as
+    the only backend-independent integrity guarantee.
+  - §4.1: ingress now responds `202 Accepted {business_tx_id, workflow_id, traceparent}`
+    immediately after `StartWorkflow`; added a status-polling block in the sequence
+    diagram and an explanatory paragraph that points at `scenarios/_common.py::await_workflow`
+    and notes a status endpoint as the production alternative.
+  - §4.2: the "alle Spans tragen ..." attribute list now references `payload_ref.sha256`
+    instead of `payload_ref.etag`.
+  - §6: rephrased the metrics-cardinality bullet as "Optional / Erweiterung" and forwarded
+    to §9; the blob-metadata bullet stays as the open requirement (IS-010 implements).
+  - New §9 "Produktionshärtung" with five subsections: OTel Collector, OTLP logs, metrics
+    cardinality, blob immutability/versioning policies, and a production-grade status
+    endpoint (replacing direct cluster polling).
+  No code changes. Discrepancy noted: Service A currently returns HTTP 200, not 202 — see
+  follow-up note on the PR.
+
 - [x] **BUG-001 -- Activity mis-routing: all activities dispatched to TASK_QUEUE**
   All four `execute_activity` calls in `OrderWorkflow.run` omitted `task_queue=`, so
   Temporal dispatched every activity to the workflow's default queue (`TASK_QUEUE`).
