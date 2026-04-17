@@ -86,7 +86,9 @@ def upload(data: bytes, path: str, metadata: dict[str, str] | None = None) -> Bl
     etag = ""
     with _store_factory() as store:
         store.write(path, data, overwrite=True)
-        if metadata:
+        # ``is not None``: an empty dict must still reach the SDK so a caller
+        # can deliberately clear existing Azure blob metadata.
+        if metadata is not None:
             _metadata_setter(path, metadata)
         if store.supports(Capability.METADATA):
             etag = store.get_file_info(path).etag or ""

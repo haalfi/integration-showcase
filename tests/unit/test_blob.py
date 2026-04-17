@@ -162,6 +162,27 @@ class TestUploadMetadata:
         upload(b"payload", "meta/blob.bin", metadata=meta)
         assert calls == [("meta/blob.bin", meta)]
 
+    def test_metadata_setter_invoked_with_empty_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``metadata={}`` reaches the SDK so callers can clear Azure blob metadata.
+
+        Only ``metadata=None`` skips the setter; an empty dict is a distinct intent.
+        """
+        s = Store(MemoryBackend())
+
+        @contextmanager
+        def _factory() -> Generator[Store, None, None]:
+            yield s
+
+        monkeypatch.setattr(blob_module, "_store_factory", _factory)
+        calls: list[tuple[str, dict[str, str]]] = []
+        monkeypatch.setattr(
+            blob_module,
+            "_metadata_setter",
+            lambda path, meta: calls.append((path, meta)),
+        )
+        upload(b"payload", "meta/empty.bin", metadata={})
+        assert calls == [("meta/empty.bin", {})]
+
 
 class TestDownload:
     def test_roundtrip(self, store: Store) -> None:

@@ -18,7 +18,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 
 from integration_showcase.shared import blob
 from integration_showcase.shared.constants import BUSINESS_TX_ID_BAGGAGE_KEY, TASK_QUEUE
-from integration_showcase.shared.envelope import BlobRef, Envelope
+from integration_showcase.shared.envelope import DEFAULT_SCHEMA_VERSION, BlobRef, Envelope
 from integration_showcase.shared.otel import (
     inject_carrier_into_envelope,
     set_envelope_span_attrs,
@@ -105,7 +105,7 @@ async def create_order(request: OrderRequest) -> OrderResponse:
                     "workflow_id": workflow_id,
                     "run_id": "",
                     "step_id": "start",
-                    "schema_version": Envelope.model_fields["schema_version"].default,
+                    "schema_version": DEFAULT_SCHEMA_VERSION,
                     "idempotency_key": idempotency_key,
                 },
             )

@@ -14,10 +14,13 @@
   blob is written.
   Test seam: module-level `_metadata_setter` can be monkeypatched (defaulted to a no-op
   in unit tests via the `store` fixture). Unit tests: `TestUploadMetadata` asserts the
-  setter is invoked once with the caller's dict and stays untouched when `metadata=None`.
-  `test_envelope.TestBlobMetadata` pins the five returned keys. Integration test
-  `test_metadata_roundtrip_from_azurite` reads the blob's metadata back via the Azure
-  Blob SDK and compares to the dict written. Concept §6 checkbox is now `[x]`.
+  setter is invoked once with the caller's dict, stays untouched when `metadata=None`,
+  and is still invoked with an empty dict (the ``metadata is not None`` guard treats
+  ``{}`` as a deliberate clear, not a skip). `test_envelope.TestBlobMetadata` pins the
+  five returned keys. Integration test `test_metadata_roundtrip_from_azurite` reads the
+  blob's metadata back via the Azure Blob SDK and compares to the dict written. Concept
+  §6 checkbox is now `[x]`. The direct Azure SDK call is a documented deviation from
+  `DESIGN.md § remote-store usage`; removal is tracked by BK-005.
 
 - [x] **IS-010 -- Blob metadata via remote-store (scoped to etag population)**
   `shared/blob.upload()` now calls `store.get_file_info(path)` inside the write

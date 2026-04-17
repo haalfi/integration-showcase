@@ -8,6 +8,11 @@ from __future__ import annotations
 
 from pydantic import BaseModel, field_validator
 
+DEFAULT_SCHEMA_VERSION = "1.0"
+"""Canonical Envelope schema version. Callers that need the default before an
+Envelope is constructed (e.g. Service A ingress) must import this constant
+rather than reaching into Pydantic's ``model_fields``."""
+
 
 class BlobRef(BaseModel):
     """Immutable reference to a blob in the payload store.
@@ -46,7 +51,7 @@ class Envelope(BaseModel):
     traceparent: str
     tracestate: str = ""
     baggage: dict[str, str] = {}
-    schema_version: str = "1.0"
+    schema_version: str = DEFAULT_SCHEMA_VERSION
     content_type: str = "application/json"
     idempotency_key: str
 
@@ -61,7 +66,7 @@ class Envelope(BaseModel):
     def make_idempotency_key(
         business_tx_id: str,
         step_id: str,
-        schema_version: str = "1.0",
+        schema_version: str = DEFAULT_SCHEMA_VERSION,
     ) -> str:
         """Canonical format: ``{business_tx_id}:{step_id}:{schema_version}``."""
         return f"{business_tx_id}:{step_id}:{schema_version}"
