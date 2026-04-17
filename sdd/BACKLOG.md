@@ -35,20 +35,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 Ordered by recommended execution: concept-first (sets the acceptance bar),
 then small-wins, then the substantive code work, then cleanup.
 
-- [ ] **IS-009 -- Payment failure touches blob I/O first**
-  `charge_payment` checks `FORCE_PAYMENT_FAILURE` before `blob.download`, so the failed-
-  attempt span tree in Jaeger has no `blob.get` child -- inconsistent with concept §5.2 which
-  shows `C->AB: GET inventory-result.json` followed by `C--xT: Error`. Narrow scope: move
-  only `blob.download` (the bytes are not used in the failure path) above the failure
-  check; keep `json.loads` and the rest after the check so a malformed payload still cannot
-  starve the deterministic decline.
-  Trade-off to acknowledge in the diff: the activity docstring at
-  `service_c/activities.py:62-69` currently claims "the failure check runs before any I/O
-  so a declined charge is a deterministic `InsufficientFundsError` regardless of the state
-  of the blob store". With `blob.download` moved up, a blob-store outage now surfaces
-  before `InsufficientFundsError`. Update the docstring to reflect the new ordering and
-  the demo-trace motivation.
-
 - [ ] **IS-010 -- Blob metadata via remote-store**
   Concept §6 checklist item currently unimplemented. Extend `shared/blob.upload` to forward
   `metadata={workflow_id, run_id, step_id, schema_version, idempotency_key}` through

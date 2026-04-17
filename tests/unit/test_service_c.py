@@ -108,29 +108,19 @@ class TestChargePayment:
         assert result["amount_cents"] == 2 * 4200
         assert result["charge_id"] == row["charge_id"]
 
-    def test_force_failure_raises_before_any_io(
+    def test_force_failure_raises_after_blob_download_before_db_write(
         self,
         memory_store: Store,
         db_conn: sqlite3.Connection,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """``FORCE_PAYMENT_FAILURE`` must raise before any blob or DB I/O."""
-        monkeypatch.setenv("FORCE_PAYMENT_FAILURE", "true")
+        """``FORCE_PAYMENT_FAILURE`` raises after blob.download but before DB/receipt I/O.
 
-        # Build the envelope but do NOT upload the payload blob -- if the
-        # activity ever reaches blob.download it will raise NotFound, which
-        # would mask the InsufficientFundsError we want to see first.
-        env = Envelope(
-            workflow_id="order-tx-nopayload",
-            run_id="",
-            business_tx_id="tx-nopayload",
-            step_id="reserve-inventory",
-            payload_ref=upload(b"missing", "does/not/matter/we/never/read/it.json"),
-            traceparent="",
-            idempotency_key=Envelope.make_idempotency_key("tx-nopayload", "reserve-inventory"),
-        )
-        # Remove the blob so we can prove download was never called.
-        # (Store.delete exists for the memory backend; skip if not available.)
+        IS-009: blob.download now precedes the failure check so the demo trace
+        in Jaeger includes a ``blob.get`` child under the failed span.
+        """
+        monkeypatch.setenv("FORCE_PAYMENT_FAILURE", "true")
+        env = _make_inventory_envelope(["w"], tx="tx-failure")
 
         with pytest.raises(InsufficientFundsError, match="Payment declined"):
             charge_payment(env)
@@ -139,9 +129,7 @@ class TestChargePayment:
         with pytest.raises(NotFound):
             memory_store.read_bytes(f"workflows/{env.business_tx_id}/charge-payment.json")
 
-        # No payment row written. The table may or may not exist depending on
-        # whether db.connect() was reached before raising; either way the
-        # row count is zero.
+        # No payment row written.
         try:
             count = db_conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
         except sqlite3.OperationalError:
