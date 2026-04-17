@@ -35,14 +35,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 Ordered by recommended execution: concept-first (sets the acceptance bar),
 then small-wins, then the substantive code work, then cleanup.
 
-- [ ] **IS-008 -- Workflow-level span attributes**
-  Temporal's `TracingInterceptor` creates a `RunWorkflow:OrderWorkflow` span that currently
-  carries no business attrs, so concept §6 ("Alle Spans tragen als Attribute mindestens ...")
-  is violated at the workflow level. Tag the span inside `OrderWorkflow.run` with the six
-  required attributes (`business_tx_id`, `workflow_id`, `run_id`, `step_id="workflow"`,
-  `payload_ref_sha256`, `schema_version`). Acceptance: a Jaeger search on a single
-  `business_tx_id` returns the workflow span alongside ingress and activity spans.
-
 - [ ] **IS-009 -- Payment failure touches blob I/O first**
   `charge_payment` checks `FORCE_PAYMENT_FAILURE` before `blob.download`, so the failed-
   attempt span tree in Jaeger has no `blob.get` child -- inconsistent with concept §5.2 which

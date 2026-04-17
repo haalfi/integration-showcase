@@ -12,12 +12,15 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from opentelemetry import trace
+
     from integration_showcase.shared.constants import (
         TASK_QUEUE_B,
         TASK_QUEUE_C,
         TASK_QUEUE_D,
     )
     from integration_showcase.shared.envelope import BlobRef, Envelope
+    from integration_showcase.shared.otel import set_envelope_span_attrs
     from integration_showcase.workflow.envelopes import (
         compensate_reserve_inventory_envelope,
     )
@@ -50,6 +53,15 @@ class OrderWorkflow:
         # activity span (IS-005) sees a stable run_id without needing activity.info().
         if not envelope.run_id:
             envelope = envelope.model_copy(update={"run_id": workflow.info().run_id})
+
+        # Tag the TracingInterceptor RunWorkflow span with the six required business
+        # attributes (IS-008). step_id="workflow" is a fixed saga-root marker for this
+        # span only — the envelope passed to activities keeps step_id="start" so that
+        # envelope.advance("reserve-inventory", ...) correctly sets parent_step_id="start".
+        set_envelope_span_attrs(
+            trace.get_current_span(),
+            envelope.model_copy(update={"step_id": "workflow"}),
+        )
 
         # Step 1: Reserve inventory
         inventory_ref: BlobRef = await workflow.execute_activity(
