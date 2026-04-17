@@ -62,18 +62,24 @@ def _db_path() -> str:
 def charge_payment(envelope: Envelope) -> BlobRef:
     """Charge payment. Idempotent per ``envelope.idempotency_key``.
 
-    The failure check runs before any I/O so a declined charge is a
-    deterministic ``InsufficientFundsError`` regardless of the state of
-    the blob store or the local DB. ``InsufficientFundsError`` is the
-    workflow's non-retryable signal to start compensation.
+    ``blob.download`` runs before the failure check so that the demo trace
+    in Jaeger shows a ``blob.get`` child span under the failed
+    ``charge_payment`` span, aligning with §5.2's pattern of a blob GET
+    preceding the payment error.  Note: §5.2's full retry-then-fail sequence
+    (attempt 1 = gateway_timeout, attempt 2 = insufficient_funds) is tracked
+    separately by IS-012.  A blob-store outage will surface as a retryable
+    error rather than the deterministic ``InsufficientFundsError``; the
+    previous guarantee ("failure check runs before any I/O") no longer holds.
+    ``InsufficientFundsError`` remains the workflow's non-retryable signal
+    to start compensation when the blob store is healthy.
     """
+    input_bytes = blob.download(envelope.payload_ref)
+    input_data = json.loads(input_bytes)
+
     if os.environ.get("FORCE_PAYMENT_FAILURE", "").lower() == "true":
         raise InsufficientFundsError(
             f"Payment declined for business_tx_id={envelope.business_tx_id}"
         )
-
-    input_bytes = blob.download(envelope.payload_ref)
-    input_data = json.loads(input_bytes)
     items = list(input_data["items"])
     amount_cents = len(items) * _PRICE_PER_ITEM_CENTS
 

@@ -1,5 +1,16 @@
 # Completed Backlog Items
 
+- [x] **IS-009 -- Payment failure touches blob I/O first**
+  Moved `blob.download` (and `json.loads`) above the `FORCE_PAYMENT_FAILURE` check in
+  `service_c/activities.py`. The failed-payment span in Jaeger now includes a `blob.get`
+  child span, aligning with §5.2's pattern of a blob GET preceding the payment error.
+  Note: §5.2's full retry-then-fail sequence (attempt 1 = gateway_timeout, attempt 2 =
+  insufficient_funds) remains unimplemented and is tracked by IS-012.
+  Updated the `charge_payment` docstring: a blob-store outage now surfaces as a retryable
+  error rather than the deterministic `InsufficientFundsError`.
+  Renamed the unit test and added a download-call spy to assert `blob.download` actually
+  executes on the failure path, so a future regression cannot silently revert the ordering.
+
 - [x] **IS-008 -- Workflow-level span attributes**
   Added `trace` + `set_envelope_span_attrs` imports to `workflow/order.py`
   (inside `workflow.unsafe.imports_passed_through()`). After the `run_id` backfill,
