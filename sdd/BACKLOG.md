@@ -35,20 +35,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 Ordered by recommended execution: concept-first (sets the acceptance bar),
 then small-wins, then the substantive code work, then cleanup.
 
-- [ ] **IS-011 -- Full compensation tree**
-  Showcase currently compensates only `reserve-inventory` on pre-charge payment failure.
-  Extend so concept §5.3's state diagram is fully demoable -- three sub-items:
-  - Add `refund_payment` activity in `service_c/activities.py`: idempotent,
-    `compensate.charge-payment` step naming, orphan-tombstone pattern mirroring
-    `compensate_reserve_inventory`.
-  - Extend `OrderWorkflow` to execute compensations in reverse order on shipment failure:
-    refund first, then release reservation.
-  - Add a scenario script (or branch of `run_unhappy.py`) that forces a shipment failure to
-    drive the two-step compensation path.
-  Acceptance: Jaeger span tree matches concept §5.4 for both pre-charge and post-charge
-  failure paths; unit tests in `tests/unit/test_workflow_routing.py` cover reverse-order
-  dispatch; one behavioural test in `tests/integration/` exercises the two-step compensation.
-
 - [ ] **IS-012 -- Retry-then-fail payment path**
   Concept §5.2 sequence shows attempt 1 = `gateway_timeout` (retryable) -> attempt 2 =
   `insufficient_funds` (non-retryable). The retry policy is wired correctly

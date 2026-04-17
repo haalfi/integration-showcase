@@ -87,6 +87,10 @@ class TestWorkflowRoutingContract:
         m = self._activity_to_task_queue()
         assert m.get("charge_payment") == "TASK_QUEUE_C"
 
+    def test_refund_payment_routes_to_task_queue_c(self) -> None:
+        m = self._activity_to_task_queue()
+        assert m.get("refund_payment") == "TASK_QUEUE_C"
+
     def test_dispatch_shipment_routes_to_task_queue_d(self) -> None:
         m = self._activity_to_task_queue()
         assert m.get("dispatch_shipment") == "TASK_QUEUE_D"

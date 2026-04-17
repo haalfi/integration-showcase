@@ -81,6 +81,11 @@ def _poison_compensate(env: Envelope) -> BlobRef:  # noqa: ARG001
     raise RuntimeError("compensate_reserve_inventory routed to wrong queue (TASK_QUEUE)")
 
 
+@activity.defn(name="refund_payment")
+def _poison_refund(env: Envelope) -> BlobRef:  # noqa: ARG001
+    raise RuntimeError("refund_payment routed to wrong queue (TASK_QUEUE)")
+
+
 # ---------------------------------------------------------------------------
 # Real stubs — registered on per-service queues, succeed
 # ---------------------------------------------------------------------------
@@ -103,6 +108,11 @@ def _stub_dispatch(env: Envelope) -> BlobRef:  # noqa: ARG001
 
 @activity.defn(name="compensate_reserve_inventory")
 def _stub_compensate(env: Envelope) -> BlobRef:  # noqa: ARG001
+    return _STUB_REF
+
+
+@activity.defn(name="refund_payment")
+def _stub_refund(env: Envelope) -> BlobRef:  # noqa: ARG001
     return _STUB_REF
 
 
@@ -137,6 +147,7 @@ async def test_happy_path_routes_each_activity_to_its_service_queue() -> None:
                         _poison_charge,
                         _poison_dispatch,
                         _poison_compensate,
+                        _poison_refund,
                     ],
                     activity_executor=executor,
                 ),
@@ -149,7 +160,7 @@ async def test_happy_path_routes_each_activity_to_its_service_queue() -> None:
                 Worker(
                     client,
                     task_queue=TASK_QUEUE_C,
-                    activities=[_stub_charge],
+                    activities=[_stub_charge, _stub_refund],
                     activity_executor=executor,
                 ),
                 Worker(
@@ -204,6 +215,7 @@ async def test_unhappy_path_compensation_routes_to_task_queue_b() -> None:
                         _poison_charge,
                         _poison_dispatch,
                         _poison_compensate,
+                        _poison_refund,
                     ],
                     activity_executor=executor,
                 ),
@@ -216,7 +228,7 @@ async def test_unhappy_path_compensation_routes_to_task_queue_b() -> None:
                 Worker(
                     client,
                     task_queue=TASK_QUEUE_C,
-                    activities=[_stub_charge_fail],
+                    activities=[_stub_charge_fail, _stub_refund],
                     activity_executor=executor,
                 ),
                 Worker(
@@ -233,4 +245,78 @@ async def test_unhappy_path_compensation_routes_to_task_queue_b() -> None:
                         id="test-routing-unhappy-001",
                         task_queue=TASK_QUEUE,
                     )
+    assert compensate_calls, "compensate_reserve_inventory must be invoked on TASK_QUEUE_B"
+
+
+@pytest.mark.integration
+async def test_shipment_failure_triggers_two_step_reverse_compensation() -> None:
+    """Shipment failure must trigger refund_payment on TASK_QUEUE_C then
+    compensate_reserve_inventory on TASK_QUEUE_B (reverse order).
+
+    Poison stubs on TASK_QUEUE catch any misrouted compensation calls.
+    Tracking stubs on the correct service queues prove both compensations ran.
+    """
+    refund_calls: list[bool] = []
+    compensate_calls: list[bool] = []
+
+    @activity.defn(name="dispatch_shipment")
+    def _stub_dispatch_fail(_env: Envelope) -> BlobRef:
+        raise ApplicationError("carrier unavailable", type="ShipmentError", non_retryable=False)
+
+    @activity.defn(name="refund_payment")
+    def _stub_refund_tracking(_env: Envelope) -> BlobRef:
+        refund_calls.append(True)
+        return _STUB_REF
+
+    @activity.defn(name="compensate_reserve_inventory")
+    def _stub_compensate_tracking(_env: Envelope) -> BlobRef:
+        compensate_calls.append(True)
+        return _STUB_REF
+
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter,
+    ) as env:
+        client = env.client
+        with ThreadPoolExecutor() as executor:
+            async with (
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE,
+                    workflows=[OrderWorkflow],
+                    activities=[
+                        _poison_reserve,
+                        _poison_charge,
+                        _poison_dispatch,
+                        _poison_compensate,
+                        _poison_refund,
+                    ],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_B,
+                    activities=[_stub_reserve, _stub_compensate_tracking],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_C,
+                    activities=[_stub_charge, _stub_refund_tracking],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_D,
+                    activities=[_stub_dispatch_fail],
+                    activity_executor=executor,
+                ),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await client.execute_workflow(
+                        OrderWorkflow.run,
+                        _start_envelope(tx="routing-test-003"),
+                        id="test-routing-shipment-fail-001",
+                        task_queue=TASK_QUEUE,
+                    )
+    assert refund_calls, "refund_payment must be invoked on TASK_QUEUE_C"
     assert compensate_calls, "compensate_reserve_inventory must be invoked on TASK_QUEUE_B"

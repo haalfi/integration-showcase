@@ -24,9 +24,11 @@ import integration_showcase.shared.db as db_module
 from integration_showcase.service_c.activities import (
     InsufficientFundsError,
     charge_payment,
+    refund_payment,
 )
 from integration_showcase.shared.blob import upload
-from integration_showcase.shared.envelope import Envelope
+from integration_showcase.shared.envelope import BlobRef, Envelope
+from integration_showcase.workflow.envelopes import refund_payment_envelope
 
 
 @pytest.fixture()
@@ -222,3 +224,106 @@ class TestActivitySpanAttributes:
         assert attrs["business_tx_id"] == env.business_tx_id
         assert attrs["step_id"] == env.step_id
         assert attrs["payload_ref_sha256"] == env.payload_ref.sha256
+
+
+# ---------------------------------------------------------------------------
+# refund_payment helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_payment_envelope(items: list[str], tx: str = "tx-refund") -> Envelope:
+    """Build an inventory envelope then advance to charge-payment step (as workflow does)."""
+    inv_env = _make_inventory_envelope(items, tx=tx)
+    # Simulate workflow: advance to charge-payment after a successful charge
+    charge_result = json.dumps(
+        {
+            "business_tx_id": tx,
+            "charge_id": "ch-fixture",
+            "amount_cents": len(items) * 4200,
+            "status": "CHARGED",
+            "charged_at": "2026-04-17T00:00:00+00:00",
+        },
+        sort_keys=True,
+    ).encode()
+    payment_ref = upload(charge_result, f"workflows/{tx}/charge-payment.json")
+    return inv_env.advance("charge-payment", payment_ref)
+
+
+def _refund_envelope(payment_envelope: Envelope, payment_ref: BlobRef) -> Envelope:
+    """Construct the canonical compensation envelope (mirrors workflow)."""
+    return refund_payment_envelope(payment_envelope, payment_ref)
+
+
+class TestRefundPayment:
+    def test_refunds_existing_payment(
+        self, memory_store: Store, db_conn: sqlite3.Connection
+    ) -> None:
+        """Normal path: payment exists -> refund recorded with kind='refunded'."""
+        # First, write a real payment row via charge_payment.
+        inv_env = _make_inventory_envelope(["w"], tx="tx-refund-ok")
+        payment_ref = charge_payment(inv_env)
+        payment_env = inv_env.advance("charge-payment", payment_ref)
+
+        comp_env = _refund_envelope(payment_env, payment_ref)
+        ref = refund_payment(comp_env)
+
+        row = db_conn.execute(
+            "SELECT charge_id, kind, refunded_at FROM payment_refunds WHERE idempotency_key = ?",
+            (comp_env.idempotency_key,),
+        ).fetchone()
+        assert row is not None
+        assert row["kind"] == "refunded"
+        assert row["charge_id"].startswith("ch-")
+        assert row["refunded_at"] is not None
+
+        result = json.loads(memory_store.read_bytes(ref.blob_url))
+        assert ref.blob_url == f"workflows/{inv_env.business_tx_id}/compensate.charge-payment.json"
+        assert result["kind"] == "refunded"
+        assert result["refunded"] is True
+        assert result["charge_id"] == row["charge_id"]
+
+    def test_orphan_refund_writes_tombstone(
+        self, memory_store: Store, db_conn: sqlite3.Connection
+    ) -> None:
+        """Orphan path: no prior payment -> tombstone with kind='orphan_tombstone'."""
+        payment_env = _make_payment_envelope(["w"], tx="tx-orphan-refund")
+        # Use the fixture payment_ref (not written to DB via charge_payment).
+        comp_env = _refund_envelope(payment_env, payment_env.payload_ref)
+
+        ref = refund_payment(comp_env)
+
+        row = db_conn.execute(
+            "SELECT charge_id, kind FROM payment_refunds WHERE idempotency_key = ?",
+            (comp_env.idempotency_key,),
+        ).fetchone()
+        assert row is not None
+        assert row["charge_id"] == "orphan"
+        assert row["kind"] == "orphan_tombstone"
+
+        result = json.loads(memory_store.read_bytes(ref.blob_url))
+        assert result["kind"] == "orphan_tombstone"
+
+        # Retry is idempotent: same BlobRef returned, only one row in DB.
+        again = refund_payment(comp_env)
+        assert ref == again
+        count = db_conn.execute(
+            "SELECT COUNT(*) FROM payment_refunds WHERE business_tx_id = ?",
+            (payment_env.business_tx_id,),
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_retry_is_idempotent_with_stable_blobref(
+        self, memory_store: Store, db_conn: sqlite3.Connection
+    ) -> None:
+        """Concurrent retries produce identical BlobRef (same sha256)."""
+        inv_env = _make_inventory_envelope(["w", "g"], tx="tx-refund-idem")
+        payment_ref = charge_payment(inv_env)
+        payment_env = inv_env.advance("charge-payment", payment_ref)
+        comp_env = _refund_envelope(payment_env, payment_ref)
+
+        first = refund_payment(comp_env)
+        second = refund_payment(comp_env)
+
+        assert first == second
+        count = db_conn.execute("SELECT COUNT(*) FROM payment_refunds").fetchone()[0]
+        assert count == 1

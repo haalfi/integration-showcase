@@ -1,4 +1,4 @@
-"""Payment charging activity (Service C).
+"""Payment charging and refund activities (Service C).
 
 Reads the inventory result blob, charges the customer (POC: $42 per item),
 persists payment state in a private SQLite DB keyed on
@@ -7,8 +7,12 @@ persists payment state in a private SQLite DB keyed on
 Set ``FORCE_PAYMENT_FAILURE=true`` to trigger ``InsufficientFundsError``,
 which is non-retryable in ``OrderWorkflow`` and drives compensation.
 
-This activity is ``def`` (not ``async def``) because it does blocking
-I/O; the worker registers it with an ``activity_executor``
+``refund_payment`` compensates a prior ``charge_payment``. It follows the
+same orphan-tombstone pattern as ``compensate_reserve_inventory``: if no
+payment row is found the activity inserts a tombstone so retries are no-ops.
+
+These activities are ``def`` (not ``async def``) because they do blocking
+I/O; the worker registers them with an ``activity_executor``
 ``ThreadPoolExecutor`` so blocking calls don't starve the Temporal event
 loop.
 """
@@ -45,6 +49,16 @@ CREATE TABLE IF NOT EXISTS payments (
     amount_cents    INTEGER NOT NULL,
     status          TEXT NOT NULL,
     charged_at      TEXT NOT NULL
+)
+"""
+
+_REFUNDS_DDL = """
+CREATE TABLE IF NOT EXISTS payment_refunds (
+    idempotency_key TEXT PRIMARY KEY,
+    business_tx_id  TEXT NOT NULL,
+    charge_id       TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    refunded_at     TEXT NOT NULL
 )
 """
 
@@ -119,4 +133,70 @@ def charge_payment(envelope: Envelope) -> BlobRef:
     }
     result_bytes = json.dumps(result, sort_keys=True).encode()
     blob_path = f"workflows/{envelope.business_tx_id}/charge-payment.json"
+    return blob.upload(result_bytes, blob_path, metadata=envelope.blob_metadata())
+
+
+@activity.defn(name="refund_payment")
+@instrument_activity
+def refund_payment(envelope: Envelope) -> BlobRef:
+    """Refund a prior payment for ``envelope.business_tx_id``.
+
+    The workflow advances the envelope to ``step_id="compensate.charge-payment"``
+    (DESIGN.md §Compensation rules) before invoking this activity, so
+    ``envelope.idempotency_key`` here is the canonical compensation key
+    ``"{business_tx_id}:compensate.charge-payment:{schema_version}"``.
+
+    Lookup of the original payment uses ``business_tx_id`` because the
+    payment was stored under the forward-step idempotency key. Idempotent
+    under concurrent retries: ``INSERT OR IGNORE`` into ``payment_refunds``
+    silently drops racing duplicates; the unconditional re-read returns the
+    canonical row so every caller produces identical result bytes.
+
+    Edge case: if no prior payment row exists (orphan compensation), a
+    tombstone row is inserted under ``envelope.idempotency_key`` so the
+    same-key retry no-ops. The blob carries ``"kind": "orphan_tombstone"``.
+    """
+    with db.connect(_db_path()) as conn:
+        conn.execute(_DDL)
+        conn.execute(_REFUNDS_DDL)
+
+        payment_row = conn.execute(
+            "SELECT charge_id FROM payments WHERE business_tx_id = ?"
+            " ORDER BY charged_at DESC LIMIT 1",
+            (envelope.business_tx_id,),
+        ).fetchone()
+
+        if payment_row is None:
+            charge_id = "orphan"
+            kind = "orphan_tombstone"
+        else:
+            charge_id = payment_row["charge_id"]
+            kind = "refunded"
+
+        refunded_at = datetime.now(UTC).isoformat()
+        conn.execute(
+            "INSERT OR IGNORE INTO payment_refunds"
+            " (idempotency_key, business_tx_id, charge_id, kind, refunded_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (envelope.idempotency_key, envelope.business_tx_id, charge_id, kind, refunded_at),
+        )
+        # Re-read under the same transaction to pick up whichever row won
+        # a concurrent-refund race; keeps all callers' result bytes identical.
+        row = conn.execute(
+            "SELECT charge_id, kind, refunded_at FROM payment_refunds WHERE idempotency_key = ?",
+            (envelope.idempotency_key,),
+        ).fetchone()
+        charge_id = row["charge_id"]
+        kind = row["kind"]
+        refunded_at = row["refunded_at"]
+
+    result = {
+        "business_tx_id": envelope.business_tx_id,
+        "charge_id": charge_id,
+        "kind": kind,
+        "refunded": True,
+        "refunded_at": refunded_at,
+    }
+    result_bytes = json.dumps(result, sort_keys=True).encode()
+    blob_path = f"workflows/{envelope.business_tx_id}/compensate.charge-payment.json"
     return blob.upload(result_bytes, blob_path, metadata=envelope.blob_metadata())

@@ -1,7 +1,9 @@
 """Order fulfillment saga workflow.
 
 Steps: reserve-inventory -> charge-payment -> dispatch-shipment.
-Payment failure triggers compensation of reserve-inventory.
+Payment failure triggers compensation of reserve-inventory (single step).
+Shipment failure triggers reverse-order two-step compensation:
+  refund-payment first, then release-reservation.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ with workflow.unsafe.imports_passed_through():
     from integration_showcase.shared.otel import set_envelope_span_attrs
     from integration_showcase.workflow.envelopes import (
         compensate_reserve_inventory_envelope,
+        refund_payment_envelope,
     )
 
 
@@ -100,13 +103,35 @@ class OrderWorkflow:
 
         payment_envelope = inventory_envelope.advance("charge-payment", payment_ref)
 
-        # Step 3: Dispatch shipment
-        await workflow.execute_activity(
-            "dispatch_shipment",
-            payment_envelope,
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=_DEFAULT_RETRY,
-            task_queue=TASK_QUEUE_D,
-        )
+        # Step 3: Dispatch shipment -- compensate payment then reservation on failure
+        try:
+            await workflow.execute_activity(
+                "dispatch_shipment",
+                payment_envelope,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_DEFAULT_RETRY,
+                task_queue=TASK_QUEUE_D,
+            )
+        except Exception:
+            # Reverse-order compensation: refund payment first, then release inventory.
+            refund_envelope = refund_payment_envelope(payment_envelope, payment_ref)
+            await workflow.execute_activity(
+                "refund_payment",
+                refund_envelope,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_COMPENSATE_RETRY,
+                task_queue=TASK_QUEUE_C,
+            )
+            compensate_envelope = compensate_reserve_inventory_envelope(
+                inventory_envelope, inventory_ref
+            )
+            await workflow.execute_activity(
+                "compensate_reserve_inventory",
+                compensate_envelope,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_COMPENSATE_RETRY,
+                task_queue=TASK_QUEUE_B,
+            )
+            raise
 
         return envelope.business_tx_id
