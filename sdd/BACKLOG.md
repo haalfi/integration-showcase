@@ -79,8 +79,9 @@ then small-wins, then the substantive code work, then cleanup.
   Decide when the demo story needs version-based immutability guarantees.
 
 - [ ] **BK-004 -- Business attrs on `store.*` spans**
-  `otel_observe`-wrapped blob spans (`store.write`, `store.read_bytes`) currently lack the
-  six business attributes, so concept §6's "Alle Spans" rule fails at the blob layer. Two
+  All `otel_observe`-wrapped blob spans (currently `store.write`, `store.read_bytes`,
+  `store.get_file_info` -- and any future ops added at the blob layer) lack the six
+  business attributes, so concept §6's "Alle Spans" rule fails at the blob layer. Two
   options: (a) an OTel `SpanProcessor` that reads `business_tx_id` from baggage and stamps
   it at span-end, or (b) a thin wrapper around `Store` that opens a child span with the
   envelope attrs before delegating. Prefer (a) -- baggage already carries `business_tx_id`

@@ -8,8 +8,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 import pytest
-from remote_store import NotFound, Store
-from remote_store._models import FileInfo
+from remote_store import Capability, FileInfo, NotFound, Store
 from remote_store.backends import MemoryBackend
 
 import integration_showcase.shared.blob as blob_module
@@ -106,12 +105,13 @@ class TestUpload:
         assert ref.blob_url == path
 
     def test_etag_empty_for_memory_backend(self, store: Store) -> None:
-        """MemoryBackend.get_file_info() returns no etag; upload() normalises None -> ''."""
+        """MemoryBackend supports METADATA but get_file_info() returns etag=None; normalised to ''."""  # noqa: E501
         ref = upload(b"payload", "etag/test.bin")
         assert ref.etag == ""
 
     def test_etag_populated_when_backend_provides_etag(self, store_with_etag: Store) -> None:
         """upload() forwards the etag from get_file_info() into BlobRef."""
+        assert store_with_etag.supports(Capability.METADATA)
         ref = upload(b"payload", "etag/test.bin")
         assert ref.etag == _EtagMemoryBackend.FAKE_ETAG
 
