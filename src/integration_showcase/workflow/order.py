@@ -55,7 +55,9 @@ class OrderWorkflow:
             envelope = envelope.model_copy(update={"run_id": workflow.info().run_id})
 
         # Tag the TracingInterceptor RunWorkflow span with the six required business
-        # attributes (IS-008). step_id="workflow" identifies this as the saga root span.
+        # attributes (IS-008). step_id="workflow" is a fixed saga-root marker for this
+        # span only — the envelope passed to activities keeps step_id="start" so that
+        # envelope.advance("reserve-inventory", ...) correctly sets parent_step_id="start".
         set_envelope_span_attrs(
             trace.get_current_span(),
             envelope.model_copy(update={"step_id": "workflow"}),
