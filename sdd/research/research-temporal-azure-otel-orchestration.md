@@ -85,7 +85,7 @@ Nutzdaten selbst:
   "step_id": "reserve-inventory",
   "payload_ref": {
     "blob_url": "https://acct.blob.core.windows.net/workflows/tx-789/input.json",
-    "sha256": "…",                    // pflicht — backend-unabhängige Integrität
+    "sha256": "…",                    // Pflicht — backend-unabhängige Integrität
     "etag": "0x8da4f1c93b7e9f2a",     // Azure/Azurite: via get_file_info() befüllt; MemoryBackend: ""
     "version_id": ""                  // reserviert; Azure-Versionierung nicht aktiv (BK-003)
   },
@@ -110,7 +110,7 @@ Nutzdaten selbst:
 
 **Pflicht- vs. optionale Felder in `payload_ref`:**
 
-- `blob_url` und `sha256` sind **pflicht**. `sha256` ist die einzige
+- `blob_url` und `sha256` sind **Pflicht**. `sha256` ist die einzige
   Integritätsgarantie, die backend-unabhängig gilt: jeder Konsument
   kann das geladene Blob lokal verifizieren.
 - `etag` wird nach jedem Schreibvorgang über `Store.get_file_info()` befüllt,
