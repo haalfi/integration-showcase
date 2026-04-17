@@ -322,8 +322,10 @@ im Tracing-Backend rekonstruieren.
       nur in Headern.
 - [ ] **W3C Trace Context** (`traceparent`) + **Baggage** an jeder
       Service-Grenze propagieren.
-- [ ] Blob-**Metadaten** enthalten `workflow_id`, `run_id`, `step_id`,
-      `schema_version`.
+- [x] Blob-**Metadaten** enthalten `workflow_id`, `run_id`, `step_id`,
+      `schema_version`, `idempotency_key` (IS-014, via
+      `Envelope.blob_metadata()` an `shared.blob.upload(metadata=…)`).
+      Read-back via Azure Blob SDK: `BlobClient.get_blob_properties().metadata`.
 - [ ] Activities sind **idempotent** (Temporal darf wiederholen) –
       `idempotency_key` in jeder Fachoperation prüfen.
 - [ ] **Optional / Erweiterung:** Sobald Metriken eingeführt werden,

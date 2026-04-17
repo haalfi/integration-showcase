@@ -1,5 +1,24 @@
 # Completed Backlog Items
 
+- [x] **IS-014 -- Blob metadata via remote-store (correlation attrs on payload blobs)**
+  `shared/blob.upload()` now accepts a `metadata: dict[str, str] | None` kwarg and forwards
+  it to Azure Blob Storage. remote-store v0.23.0 has no metadata channel on `Store.write()`
+  and `AzureBackend.unwrap()` only exposes `FileSystemClient` (DataLake/HNS) — our blob-only
+  Azurite does not serve DFS — so `_set_azure_blob_metadata()` reuses `STORE_URL` /
+  `STORE_CONTAINER` to build a `BlobServiceClient` and calls `set_blob_metadata()` after
+  the remote-store write completes. The bypass is localised to `shared/blob.py`; all
+  service-side call sites go through `Envelope.blob_metadata()` which returns
+  `{workflow_id, run_id, step_id, schema_version, idempotency_key}` (concept §6 + the
+  idempotency key so orphaned blobs trace back to their writing step). Service A ingress
+  builds the dict inline because the envelope is not yet constructed when the input
+  blob is written.
+  Test seam: module-level `_metadata_setter` can be monkeypatched (defaulted to a no-op
+  in unit tests via the `store` fixture). Unit tests: `TestUploadMetadata` asserts the
+  setter is invoked once with the caller's dict and stays untouched when `metadata=None`.
+  `test_envelope.TestBlobMetadata` pins the five returned keys. Integration test
+  `test_metadata_roundtrip_from_azurite` reads the blob's metadata back via the Azure
+  Blob SDK and compares to the dict written. Concept §6 checkbox is now `[x]`.
+
 - [x] **IS-010 -- Blob metadata via remote-store (scoped to etag population)**
   `shared/blob.upload()` now calls `store.get_file_info(path)` inside the write
   context manager when `store.supports(Capability.METADATA)`, and forwards the
@@ -57,7 +76,7 @@
   - §4.2: the "alle Spans tragen ..." attribute list now references `payload_ref.sha256`
     instead of `payload_ref.etag`.
   - §6: rephrased the metrics-cardinality bullet as "Optional / Erweiterung" and forwarded
-    to §9; the blob-metadata bullet stays as the open requirement (IS-010 implements).
+    to §9; the blob-metadata bullet stays as the open requirement (IS-014 implements).
   - New §9 "Produktionshärtung" with five subsections: OTel Collector, OTLP logs, metrics
     cardinality, blob immutability/versioning policies, and a production-grade status
     endpoint (replacing direct cluster polling).

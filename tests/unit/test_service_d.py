@@ -36,6 +36,7 @@ def memory_store(monkeypatch: pytest.MonkeyPatch) -> Store:
         yield s
 
     monkeypatch.setattr(blob_module, "_store_factory", _factory)
+    monkeypatch.setattr(blob_module, "_metadata_setter", lambda _path, _meta: None)
     return s
 
 

@@ -95,7 +95,20 @@ async def create_order(request: OrderRequest) -> OrderResponse:
                 {"items": request.items, "customer_id": request.customer_id}
             ).encode()
             blob_path = f"workflows/{business_tx_id}/input.json"
-            payload_ref: BlobRef = blob.upload(payload, blob_path)
+            idempotency_key = Envelope.make_idempotency_key(business_tx_id, "start")
+            # run_id is empty at ingress (Temporal assigns it when the workflow
+            # starts); later steps forward the real run_id via Envelope.blob_metadata().
+            payload_ref: BlobRef = blob.upload(
+                payload,
+                blob_path,
+                metadata={
+                    "workflow_id": workflow_id,
+                    "run_id": "",
+                    "step_id": "start",
+                    "schema_version": Envelope.model_fields["schema_version"].default,
+                    "idempotency_key": idempotency_key,
+                },
+            )
 
             envelope = Envelope(
                 workflow_id=workflow_id,
@@ -104,7 +117,7 @@ async def create_order(request: OrderRequest) -> OrderResponse:
                 step_id="start",
                 payload_ref=payload_ref,
                 traceparent="",
-                idempotency_key=Envelope.make_idempotency_key(business_tx_id, "start"),
+                idempotency_key=idempotency_key,
             )
 
             # Serialize current trace context into the envelope so non-Temporal

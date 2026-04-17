@@ -48,3 +48,31 @@ class TestBlobIntegration:
         upload(b"tampered", path)
         with pytest.raises(ValueError, match="SHA-256 mismatch"):
             download(ref)
+
+    def test_metadata_roundtrip_from_azurite(self) -> None:
+        """upload(metadata=...) attaches Azure blob metadata readable via the Blob SDK.
+
+        Concept §6 requires payload blobs to carry correlation IDs so operators
+        can trace any orphaned blob back to the step that wrote it.
+        """
+        import os
+
+        from azure.storage.blob import BlobServiceClient
+
+        path = "integration/test/metadata-check.bin"
+        meta = {
+            "workflow_id": "order-tx-meta",
+            "run_id": "run-meta-1",
+            "step_id": "reserve-inventory",
+            "schema_version": "1.0",
+            "idempotency_key": "tx-meta:reserve-inventory:1.0",
+        }
+        upload(b"metadata roundtrip", path, metadata=meta)
+
+        service = BlobServiceClient.from_connection_string(os.environ["STORE_URL"])
+        blob_client = service.get_blob_client(
+            container=os.environ["STORE_CONTAINER"],
+            blob=path,
+        )
+        props = blob_client.get_blob_properties()
+        assert props.metadata == meta

@@ -35,14 +35,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 Ordered by recommended execution: concept-first (sets the acceptance bar),
 then small-wins, then the substantive code work, then cleanup.
 
-- [ ] **IS-010 -- Blob metadata via remote-store**
-  Concept §6 checklist item currently unimplemented. Extend `shared/blob.upload` to forward
-  `metadata={workflow_id, run_id, step_id, schema_version, idempotency_key}` through
-  remote-store's metadata channel (backend-dependent). Verify the Azure / Azurite backend
-  surfaces metadata on read; document `MemoryBackend` behaviour explicitly (likely no-op).
-  Acceptance: blob properties in Azurite show the business attrs; concept §6 blob-metadata
-  checklist is satisfied; integration test reads back the metadata for a reserved blob.
-
 - [ ] **IS-011 -- Full compensation tree**
   Showcase currently compensates only `reserve-inventory` on pre-charge payment failure.
   Extend so concept §5.3's state diagram is fully demoable -- three sub-items:

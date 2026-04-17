@@ -27,7 +27,11 @@ class _EtagMemoryBackend(MemoryBackend):
 
 @pytest.fixture()
 def store(monkeypatch: pytest.MonkeyPatch) -> Store:
-    """Inject a MemoryBackend-backed store via the module-level factory seam."""
+    """Inject a MemoryBackend-backed store via the module-level factory seam.
+
+    Also stubs the metadata seam so tests do not touch Azure even if a caller
+    passes ``metadata=``.
+    """
     s = Store(MemoryBackend())
 
     @contextmanager
@@ -35,6 +39,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Store:
         yield s
 
     monkeypatch.setattr(blob_module, "_store_factory", _factory)
+    monkeypatch.setattr(blob_module, "_metadata_setter", lambda _path, _meta: None)
     return s
 
 
@@ -48,6 +53,7 @@ def store_with_etag(monkeypatch: pytest.MonkeyPatch) -> Store:
         yield s
 
     monkeypatch.setattr(blob_module, "_store_factory", _factory)
+    monkeypatch.setattr(blob_module, "_metadata_setter", lambda _path, _meta: None)
     return s
 
 
@@ -114,6 +120,47 @@ class TestUpload:
         assert store_with_etag.supports(Capability.METADATA)
         ref = upload(b"payload", "etag/test.bin")
         assert ref.etag == _EtagMemoryBackend.FAKE_ETAG
+
+
+class TestUploadMetadata:
+    def test_metadata_setter_not_called_when_metadata_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The Azure metadata seam stays untouched when no metadata dict is passed."""
+        s = Store(MemoryBackend())
+
+        @contextmanager
+        def _factory() -> Generator[Store, None, None]:
+            yield s
+
+        monkeypatch.setattr(blob_module, "_store_factory", _factory)
+        calls: list[tuple[str, dict[str, str]]] = []
+        monkeypatch.setattr(
+            blob_module,
+            "_metadata_setter",
+            lambda path, meta: calls.append((path, meta)),
+        )
+        upload(b"payload", "no-meta/blob.bin")
+        assert calls == []
+
+    def test_metadata_setter_receives_path_and_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The Azure metadata seam is invoked once with the caller's dict."""
+        s = Store(MemoryBackend())
+
+        @contextmanager
+        def _factory() -> Generator[Store, None, None]:
+            yield s
+
+        monkeypatch.setattr(blob_module, "_store_factory", _factory)
+        calls: list[tuple[str, dict[str, str]]] = []
+        monkeypatch.setattr(
+            blob_module,
+            "_metadata_setter",
+            lambda path, meta: calls.append((path, meta)),
+        )
+        meta = {"workflow_id": "wf-1", "step_id": "start"}
+        upload(b"payload", "meta/blob.bin", metadata=meta)
+        assert calls == [("meta/blob.bin", meta)]
 
 
 class TestDownload:

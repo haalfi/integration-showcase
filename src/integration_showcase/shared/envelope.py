@@ -66,6 +66,21 @@ class Envelope(BaseModel):
         """Canonical format: ``{business_tx_id}:{step_id}:{schema_version}``."""
         return f"{business_tx_id}:{step_id}:{schema_version}"
 
+    def blob_metadata(self) -> dict[str, str]:
+        """Return correlation attributes for ``shared.blob.upload(metadata=...)``.
+
+        Concept §6: payload blobs carry ``workflow_id``, ``run_id``, ``step_id``,
+        ``schema_version`` as Azure blob metadata; ``idempotency_key`` is added
+        so orphaned blobs can be traced back to the step that wrote them.
+        """
+        return {
+            "workflow_id": self.workflow_id,
+            "run_id": self.run_id,
+            "step_id": self.step_id,
+            "schema_version": self.schema_version,
+            "idempotency_key": self.idempotency_key,
+        }
+
     def advance(self, next_step_id: str, new_payload_ref: BlobRef) -> Envelope:
         """Return a new envelope advanced to the next saga step.
 
