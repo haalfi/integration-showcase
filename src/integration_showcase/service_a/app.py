@@ -95,17 +95,25 @@ async def create_order(request: OrderRequest) -> OrderResponse:
                 {"items": request.items, "customer_id": request.customer_id}
             ).encode()
             blob_path = f"workflows/{business_tx_id}/input.json"
-            payload_ref: BlobRef = blob.upload(payload, blob_path)
-
+            # Build a stub envelope with an empty sha256 so we can reuse
+            # ``envelope.blob_metadata()`` as the single source of truth for
+            # the metadata schema. run_id is empty at ingress — Temporal
+            # assigns it when the workflow starts (see BK-005). The real
+            # payload_ref from the upload call replaces the stub below.
+            stub_ref = BlobRef(blob_url=blob_path, sha256="")
             envelope = Envelope(
                 workflow_id=workflow_id,
-                run_id="",  # Temporal assigns the run_id; backfilled from the handle below.
+                run_id="",
                 business_tx_id=business_tx_id,
                 step_id="start",
-                payload_ref=payload_ref,
+                payload_ref=stub_ref,
                 traceparent="",
                 idempotency_key=Envelope.make_idempotency_key(business_tx_id, "start"),
             )
+            payload_ref: BlobRef = blob.upload(
+                payload, blob_path, metadata=envelope.blob_metadata()
+            )
+            envelope = envelope.model_copy(update={"payload_ref": payload_ref})
 
             # Serialize current trace context into the envelope so non-Temporal
             # consumers (audit, correlation) see it alongside the Temporal header.

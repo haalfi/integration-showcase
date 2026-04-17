@@ -81,7 +81,12 @@ Temporal retries." Compensation activities deviate in one controlled way:
 
 ## remote-store usage
 
-- Blob I/O goes through `remote-store`'s `Store` API -- never raw Azure SDK calls.
+- Blob I/O goes through `remote-store`'s `Store` API by default; raw Azure SDK calls
+  are forbidden except for the one documented deviation below (BK-005).
 - Store URL is read from the `STORE_URL` env var.
 - Local dev uses Azurite connection string (`UseDevelopmentStorage=true`).
 - Backend switching requires no code changes.
+- **Known deviation (BK-005):** `shared/blob._set_azure_blob_metadata()` opens its own
+  `BlobServiceClient` to attach Azure blob metadata after `Store.write()`. This bypass is
+  accepted until remote-store v0.23.0's lack of a metadata channel is fixed upstream; see
+  `BACKLOG.md` BK-005 for the removal criteria.

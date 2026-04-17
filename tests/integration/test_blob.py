@@ -48,3 +48,53 @@ class TestBlobIntegration:
         upload(b"tampered", path)
         with pytest.raises(ValueError, match="SHA-256 mismatch"):
             download(ref)
+
+    @pytest.mark.parametrize(
+        "case, meta",
+        [
+            (
+                "post-start",
+                {
+                    "workflow_id": "order-tx-meta",
+                    "run_id": "run-meta-1",
+                    "step_id": "reserve-inventory",
+                    "schema_version": "1.0",
+                    "idempotency_key": "tx-meta:reserve-inventory:1.0",
+                },
+            ),
+            # Ingress writes the input blob before Temporal returns a run_id,
+            # so run_id is always "" at that point. Pin Azurite's behaviour
+            # for the empty-string case — the metadata layout BK-005 documents
+            # as an accepted limitation.
+            (
+                "ingress-empty-run-id",
+                {
+                    "workflow_id": "order-tx-ingress",
+                    "run_id": "",
+                    "step_id": "start",
+                    "schema_version": "1.0",
+                    "idempotency_key": "tx-ingress:start:1.0",
+                },
+            ),
+        ],
+    )
+    def test_metadata_roundtrip_from_azurite(self, case: str, meta: dict[str, str]) -> None:
+        """upload(metadata=...) attaches Azure blob metadata readable via the Blob SDK.
+
+        Concept §6 requires payload blobs to carry correlation IDs so operators
+        can trace any orphaned blob back to the step that wrote it.
+        """
+        import os
+
+        from azure.storage.blob import BlobServiceClient
+
+        path = f"integration/test/metadata-check-{case}.bin"
+        upload(b"metadata roundtrip", path, metadata=meta)
+
+        service = BlobServiceClient.from_connection_string(os.environ["STORE_URL"])
+        blob_client = service.get_blob_client(
+            container=os.environ["STORE_CONTAINER"],
+            blob=path,
+        )
+        props = blob_client.get_blob_properties()
+        assert props.metadata == meta

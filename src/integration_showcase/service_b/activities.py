@@ -95,7 +95,7 @@ def reserve_inventory(envelope: Envelope) -> BlobRef:
     }
     result_bytes = json.dumps(result, sort_keys=True).encode()
     blob_path = f"workflows/{envelope.business_tx_id}/reserve-inventory.json"
-    return blob.upload(result_bytes, blob_path)
+    return blob.upload(result_bytes, blob_path, metadata=envelope.blob_metadata())
 
 
 @activity.defn(name="compensate_reserve_inventory")
@@ -184,4 +184,4 @@ def compensate_reserve_inventory(envelope: Envelope) -> BlobRef:
     }
     result_bytes = json.dumps(result, sort_keys=True).encode()
     blob_path = f"workflows/{envelope.business_tx_id}/compensate.reserve-inventory.json"
-    return blob.upload(result_bytes, blob_path)
+    return blob.upload(result_bytes, blob_path, metadata=envelope.blob_metadata())

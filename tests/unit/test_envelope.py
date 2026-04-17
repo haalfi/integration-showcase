@@ -97,6 +97,28 @@ class TestEnvelopeAdvance:
         assert next_env.tracestate == "vendor=opaque"
 
 
+class TestBlobMetadata:
+    def test_returns_five_correlation_fields(self) -> None:
+        env = _envelope(
+            workflow_id="order-123",
+            run_id="run-456",
+            step_id="reserve-inventory",
+            idempotency_key="tx-001:reserve-inventory:1.0",
+        )
+        assert env.blob_metadata() == {
+            "workflow_id": "order-123",
+            "run_id": "run-456",
+            "step_id": "reserve-inventory",
+            "schema_version": "1.0",
+            "idempotency_key": "tx-001:reserve-inventory:1.0",
+        }
+
+    def test_values_are_strings(self) -> None:
+        """Azure blob metadata requires string values; guard against accidental non-str."""
+        meta = _envelope().blob_metadata()
+        assert all(isinstance(v, str) for v in meta.values())
+
+
 class TestEnvelopeValidation:
     def test_empty_idempotency_key_raises(self) -> None:
         with pytest.raises(Exception, match="idempotency_key"):

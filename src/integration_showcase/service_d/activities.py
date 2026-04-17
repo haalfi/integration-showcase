@@ -85,4 +85,4 @@ def dispatch_shipment(envelope: Envelope) -> BlobRef:
     }
     result_bytes = json.dumps(result, sort_keys=True).encode()
     blob_path = f"workflows/{envelope.business_tx_id}/dispatch-shipment.json"
-    return blob.upload(result_bytes, blob_path)
+    return blob.upload(result_bytes, blob_path, metadata=envelope.blob_metadata())
