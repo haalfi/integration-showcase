@@ -375,6 +375,7 @@ im Tracing-Backend rekonstruieren.
 - OpenTelemetry – [_Baggage_](https://opentelemetry.io/docs/concepts/signals/baggage/)
 - OpenTelemetry – [_Context Propagation_](https://opentelemetry.io/docs/concepts/context-propagation/)
 - W3C – [_Propagation format for distributed context: Baggage_](https://www.w3.org/TR/baggage/)
+- W3C – [_Trace Context_](https://www.w3.org/TR/trace-context/)
 - OneUptime – [_Instrument Temporal.io workflows with OpenTelemetry_](https://oneuptime.com/blog/post/2026-02-06-instrument-temporal-io-workflows-opentelemetry/view) _(praktisches Beispiel)_
 
 ---
