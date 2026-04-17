@@ -35,6 +35,11 @@ class TestBlobIntegration:
         with pytest.raises(NotFound):
             download(ref)
 
+    def test_etag_populated_from_azurite(self) -> None:
+        """upload() populates BlobRef.etag from Azure ETag via get_file_info()."""
+        ref = upload(b"etag test payload", "integration/test/etag-check.bin")
+        assert ref.etag != "", "Expected non-empty etag from Azurite after upload"
+
     def test_sha256_mismatch_raises_value_error(self) -> None:
         """SHA-256 tamper detection works end-to-end through the real backend."""
         path = "integration/test/tampered.bin"

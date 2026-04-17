@@ -86,8 +86,8 @@ Nutzdaten selbst:
   "payload_ref": {
     "blob_url": "https://acct.blob.core.windows.net/workflows/tx-789/input.json",
     "sha256": "…",                    // pflicht — backend-unabhängige Integrität
-    "etag": "",                       // reserviert; im Showcase heute leer (siehe BK-003)
-    "version_id": ""                  // reserviert; im Showcase heute leer (siehe BK-003)
+    "etag": "0x8da4f1c93b7e9f2a",     // Azure/Azurite: via get_file_info() befüllt; MemoryBackend: ""
+    "version_id": ""                  // reserviert; Azure-Versionierung nicht aktiv (BK-003)
   },
   "traceparent": "00-<trace-id>-<span-id>-01",
   "baggage": { "correlation.id": "tx-789" },
@@ -113,12 +113,12 @@ Nutzdaten selbst:
 - `blob_url` und `sha256` sind **pflicht**. `sha256` ist die einzige
   Integritätsgarantie, die backend-unabhängig gilt: jeder Konsument
   kann das geladene Blob lokal verifizieren.
-- `etag` und `version_id` sind **reserviert für zukünftige Nutzung**.
-  Im Showcase heute bleiben beide Felder leer – unabhängig vom Backend –
-  weil die `remote-store`-Schreib-API (`Store.write`) keine Schreib-
-  Metadaten zurückliefert (siehe `shared/envelope.py::BlobRef` und
-  Backlog-Item `BK-003`). Sobald `remote-store` Schreib-Metadaten
-  exponiert, kann das Azure-Backend `version_id` befüllen.
+- `etag` wird nach jedem Schreibvorgang über `Store.get_file_info()` befüllt,
+  wenn das Backend die `METADATA`-Capability unterstützt. Azure/Azurite:
+  stets nicht-leer (z. B. `"0x8da4f1c93b7e9f2a"`). `MemoryBackend`: stets `""`
+  – es unterstützt METADATA, aber `FileInfo.etag` ist `None` und wird
+  normalisiert. `version_id` bleibt leer – Azure-Blob-Versionierung ist im
+  Showcase nicht aktiviert (BK-003).
 
 ---
 
@@ -141,7 +141,7 @@ sequenceDiagram
     U->>A: POST /order (Payload)
     A->>A: generate business_tx_id=tx-789
     A->>AB: PUT workflows/tx-789/input.json
-    AB-->>A: sha256 (etag/version_id reserviert, heute leer -- siehe §3)
+    AB-->>A: sha256, etag (Azure: via get_file_info() — siehe §3)
     A->>T: StartWorkflow(order-123, envelope)
     A-->>U: 202 Accepted {business_tx_id, workflow_id, traceparent}
     A-->>O: span "ingress"

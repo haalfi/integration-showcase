@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 from collections.abc import Generator
 from contextlib import contextmanager
 
 import pytest
-from remote_store import NotFound, Store
+from remote_store import Capability, FileInfo, NotFound, Store
 from remote_store.backends import MemoryBackend
 
 import integration_showcase.shared.blob as blob_module
@@ -15,10 +16,32 @@ from integration_showcase.shared.blob import download, upload
 from integration_showcase.shared.envelope import BlobRef
 
 
+class _EtagMemoryBackend(MemoryBackend):
+    """MemoryBackend that injects a fake etag into get_file_info() responses."""
+
+    FAKE_ETAG = "test-etag-abc123"
+
+    def get_file_info(self, path: str) -> FileInfo:
+        return dataclasses.replace(super().get_file_info(path), etag=self.FAKE_ETAG)
+
+
 @pytest.fixture()
 def store(monkeypatch: pytest.MonkeyPatch) -> Store:
     """Inject a MemoryBackend-backed store via the module-level factory seam."""
     s = Store(MemoryBackend())
+
+    @contextmanager
+    def _factory() -> Generator[Store, None, None]:
+        yield s
+
+    monkeypatch.setattr(blob_module, "_store_factory", _factory)
+    return s
+
+
+@pytest.fixture()
+def store_with_etag(monkeypatch: pytest.MonkeyPatch) -> Store:
+    """Inject an _EtagMemoryBackend store that returns a non-empty etag from get_file_info."""
+    s = Store(_EtagMemoryBackend())
 
     @contextmanager
     def _factory() -> Generator[Store, None, None]:
@@ -80,6 +103,17 @@ class TestUpload:
         ref = upload(data, path)
         assert ref.sha256 == hashlib.sha256(data).hexdigest()
         assert ref.blob_url == path
+
+    def test_etag_empty_for_memory_backend(self, store: Store) -> None:
+        """MemoryBackend supports METADATA but get_file_info() returns etag=None; normalised to ''."""  # noqa: E501
+        ref = upload(b"payload", "etag/test.bin")
+        assert ref.etag == ""
+
+    def test_etag_populated_when_backend_provides_etag(self, store_with_etag: Store) -> None:
+        """upload() forwards the etag from get_file_info() into BlobRef."""
+        assert store_with_etag.supports(Capability.METADATA)
+        ref = upload(b"payload", "etag/test.bin")
+        assert ref.etag == _EtagMemoryBackend.FAKE_ETAG
 
 
 class TestDownload:

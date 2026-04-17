@@ -69,24 +69,19 @@ then small-wins, then the substantive code work, then cleanup.
   depending on `FORCE_PAYMENT_FAILURE`. Acceptance: trace shows two failed attempts + one
   terminal attempt with exponential-backoff spacing visible in Jaeger.
 
-- [ ] **BK-003 -- BlobRef field hygiene**
-  `BlobRef.etag` and `BlobRef.version_id` are reserved fields that are always empty today,
-  because `Store.write` in `remote-store` returns no write metadata at all -- this is a
-  remote-store API gap, not a backend-vs-backend split (see `shared/envelope.py::BlobRef`
-  docstring). Two paths, in order of dependency:
-  - **Option A (preferred):** wait for an upstream `remote-store` change that surfaces
-    write metadata, then land IS-010 (read-side metadata), then populate `version_id`
-    from the write result for backends that expose it (Azure with versioning enabled).
-    Dependency chain: upstream remote-store change -> IS-010 -> BK-003.
-  - **Option B (fallback):** drop both `etag` and `version_id` from `BlobRef` and from
-    the concept §3 canonical envelope. Keep `sha256` as the integrity guarantee. Update
-    every envelope construction site accordingly. No upstream dependency.
-
-  Decide once IS-010 is closed and the upstream picture is clearer.
+- [ ] **BK-003 -- BlobRef.version_id field hygiene**
+  `BlobRef.etag` is now populated from `Store.get_file_info()` post-write (IS-010).
+  `BlobRef.version_id` remains `""` — Azure blob versioning is not enabled in this
+  showcase and remote-store v0.23.0 does not surface a version ID in `FileInfo`.
+  Options: (a) enable versioning in the Azurite/Azure container and check whether
+  `FileInfo.extra` carries the version ID from the Azure SDK response; (b) drop
+  `version_id` from `BlobRef` and the concept §3 envelope as dead weight.
+  Decide when the demo story needs version-based immutability guarantees.
 
 - [ ] **BK-004 -- Business attrs on `store.*` spans**
-  `otel_observe`-wrapped blob spans (`store.write`, `store.read_bytes`) currently lack the
-  six business attributes, so concept §6's "Alle Spans" rule fails at the blob layer. Two
+  All `otel_observe`-wrapped blob spans (currently `store.write`, `store.read_bytes`,
+  `store.get_file_info` -- and any future ops added at the blob layer) lack the six
+  business attributes, so concept §6's "Alle Spans" rule fails at the blob layer. Two
   options: (a) an OTel `SpanProcessor` that reads `business_tx_id` from baggage and stamps
   it at span-end, or (b) a thin wrapper around `Store` that opens a child span with the
   envelope attrs before delegating. Prefer (a) -- baggage already carries `business_tx_id`

@@ -14,9 +14,13 @@ class BlobRef(BaseModel):
 
     ``blob_url`` is a remote-store compatible path (e.g. ``workflows/tx-001/input.json``).
     ``sha256`` is computed by the uploader before upload and verified by the downloader
-    after download. ``etag`` and ``version_id`` are reserved for future use; the
-    remote-store ``Store.write`` API does not return write metadata, so both fields
-    default to ``""`` and are not populated by :func:`~shared.blob.upload`.
+    after download. ``etag`` is populated from ``Store.get_file_info()`` after each write
+    when the backend supports the ``METADATA`` capability. Azure/Azurite: always non-empty.
+    ``MemoryBackend``: always ``""`` — it supports METADATA but ``FileInfo.etag`` is
+    ``None``, which :func:`~shared.blob.upload` normalises to ``""``. ``version_id``
+    is reserved; Azure blob versioning is not enabled in this showcase so it remains
+    ``""``.
+
     """
 
     blob_url: str

@@ -15,7 +15,7 @@ import hashlib
 import os
 from collections.abc import Callable
 
-from remote_store import Store
+from remote_store import Capability, Store
 from remote_store.backends import AzureBackend
 from remote_store.ext.otel import otel_observe
 
@@ -60,9 +60,12 @@ def upload(data: bytes, path: str) -> BlobRef:
         ``BlobRef`` with ``blob_url=path`` and the hex SHA-256 digest.
     """
     sha256 = hashlib.sha256(data).hexdigest()
+    etag = ""
     with _store_factory() as store:
         store.write(path, data, overwrite=True)
-    return BlobRef(blob_url=path, sha256=sha256)
+        if store.supports(Capability.METADATA):
+            etag = store.get_file_info(path).etag or ""
+    return BlobRef(blob_url=path, sha256=sha256, etag=etag)
 
 
 def download(ref: BlobRef) -> bytes:

@@ -1,5 +1,21 @@
 # Completed Backlog Items
 
+- [x] **IS-010 -- Blob metadata via remote-store (scoped to etag population)**
+  `shared/blob.upload()` now calls `store.get_file_info(path)` inside the write
+  context manager when `store.supports(Capability.METADATA)`, and forwards the
+  returned `FileInfo.etag` into `BlobRef.etag` (normalised `None → ""`). This
+  closes BK-003 for the etag field.
+  Scope note: `remote_store.Store.write()` has no metadata parameter in v0.23.0, so
+  custom business attributes (`workflow_id`, `run_id`, etc.) cannot be forwarded as
+  Azure blob metadata through remote-store. That path requires either a future
+  upstream API change or a sidecar-file strategy; neither is implemented here.
+  `BlobRef.version_id` remains `""` — Azure blob versioning is not enabled in this
+  showcase. `BlobRef` docstring updated to reflect the new behaviour.
+  Unit tests: `test_etag_empty_for_memory_backend` (MemoryBackend returns no etag),
+  `test_etag_populated_when_backend_provides_etag` (custom `_EtagMemoryBackend` subclass).
+  Integration test: `test_etag_populated_from_azurite` verifies a non-empty etag
+  is returned after a real write to Azurite.
+
 - [x] **IS-009 -- Payment failure touches blob I/O first**
   Moved `blob.download` (and `json.loads`) above the `FORCE_PAYMENT_FAILURE` check in
   `service_c/activities.py`. The failed-payment span in Jaeger now includes a `blob.get`
