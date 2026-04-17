@@ -122,8 +122,23 @@ class TestChargePayment:
         monkeypatch.setenv("FORCE_PAYMENT_FAILURE", "true")
         env = _make_inventory_envelope(["w"], tx="tx-failure")
 
+        download_calls: list[str] = []
+        real_download = blob_module.download
+
+        def _spy_download(ref):  # type: ignore[no-untyped-def]
+            download_calls.append(ref.blob_url)
+            return real_download(ref)
+
+        monkeypatch.setattr(blob_module, "download", _spy_download)
+
         with pytest.raises(InsufficientFundsError, match="Payment declined"):
             charge_payment(env)
+
+        # blob.download must have been called before the failure check fires.
+        assert download_calls == [env.payload_ref.blob_url], (
+            "blob.download was not called on the failure path — "
+            "the FORCE_PAYMENT_FAILURE check may have moved back above blob.download"
+        )
 
         # No receipt blob written.
         with pytest.raises(NotFound):

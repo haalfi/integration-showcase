@@ -64,10 +64,12 @@ def charge_payment(envelope: Envelope) -> BlobRef:
 
     ``blob.download`` runs before the failure check so that the demo trace
     in Jaeger shows a ``blob.get`` child span under the failed
-    ``charge_payment`` span, matching concept §5.2.  A blob-store outage
-    will therefore surface as an ``ApplicationError`` rather than
-    ``InsufficientFundsError``; the docstring previously claimed the failure
-    check was unconditionally first — that guarantee no longer holds.
+    ``charge_payment`` span, aligning with §5.2's pattern of a blob GET
+    preceding the payment error.  Note: §5.2's full retry-then-fail sequence
+    (attempt 1 = gateway_timeout, attempt 2 = insufficient_funds) is tracked
+    separately by IS-012.  A blob-store outage will surface as a retryable
+    error rather than the deterministic ``InsufficientFundsError``; the
+    previous guarantee ("failure check runs before any I/O") no longer holds.
     ``InsufficientFundsError`` remains the workflow's non-retryable signal
     to start compensation when the blob store is healthy.
     """
