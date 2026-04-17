@@ -1,5 +1,10 @@
 # Completed Backlog Items
 
+- [x] **IS-013 -- Service A `POST /order` returns 202 Accepted**
+  Added `status_code=202` to `@app.post("/order")` in `service_a/app.py`.
+  Renamed `test_returns_200_with_required_fields` → `test_returns_202_with_required_fields`
+  and flipped the assertion to `202` in `tests/unit/test_service_a.py`.
+
 - [x] **IS-007 -- Concept adaptation pass**
   Aligned `sdd/research/research-temporal-azure-otel-orchestration.md` with what the
   showcase actually demonstrates and split production-only concerns into a new section.
@@ -19,8 +24,7 @@
   - New §9 "Produktionshärtung" with five subsections: OTel Collector, OTLP logs, metrics
     cardinality, blob immutability/versioning policies, and a production-grade status
     endpoint (replacing direct cluster polling).
-  No code changes. Known gap tracked separately: Service A currently returns HTTP 200,
-  not 202 — see `IS-013` in `BACKLOG.md`.
+  No code changes. IS-013 closes the corresponding implementation gap.
 
 - [x] **BUG-001 -- Activity mis-routing: all activities dispatched to TASK_QUEUE**
   All four `execute_activity` calls in `OrderWorkflow.run` omitted `task_queue=`, so
