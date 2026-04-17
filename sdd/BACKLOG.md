@@ -35,15 +35,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 Ordered by recommended execution: concept-first (sets the acceptance bar),
 then small-wins, then the substantive code work, then cleanup.
 
-- [ ] **IS-013 -- Service A `POST /order` returns 202 Accepted**
-  Concept §4.1 (updated in IS-007) documents `202 Accepted {business_tx_id, workflow_id,
-  traceparent}` immediately after `StartWorkflow` -- the showcase is fire-and-forget. The
-  route at `src/integration_showcase/service_a/app.py:73` is
-  `@app.post("/order", response_model=OrderResponse)` with no `status_code=`, so FastAPI
-  returns HTTP 200. One-line fix: add `status_code=202`. The status-code assertion lives
-  in `tests/unit/test_service_a.py:85` (`test_returns_200_with_required_fields`) — rename
-  the test and flip the expected value.
-
 - [ ] **IS-008 -- Workflow-level span attributes**
   Temporal's `TracingInterceptor` creates a `RunWorkflow:OrderWorkflow` span that currently
   carries no business attrs, so concept §6 ("Alle Spans tragen als Attribute mindestens ...")

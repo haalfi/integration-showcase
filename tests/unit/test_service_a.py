@@ -80,9 +80,9 @@ _VALID_ORDER = {"items": ["widget-1", "gadget-2"], "customer_id": "cust-001"}
 
 
 class TestCreateOrder:
-    async def test_returns_200_with_required_fields(self, client: httpx.AsyncClient) -> None:
+    async def test_returns_202_with_required_fields(self, client: httpx.AsyncClient) -> None:
         response = await client.post("/order", json=_VALID_ORDER)
-        assert response.status_code == 200
+        assert response.status_code == 202
         body = response.json()
         assert "business_tx_id" in body
         assert "workflow_id" in body

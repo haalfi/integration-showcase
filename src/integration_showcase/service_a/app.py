@@ -70,7 +70,7 @@ class OrderResponse(BaseModel):
     traceparent: str
 
 
-@app.post("/order", response_model=OrderResponse)
+@app.post("/order", response_model=OrderResponse, status_code=202)
 async def create_order(request: OrderRequest) -> OrderResponse:
     """Ingest an order: write payload to Blob Storage, start OrderWorkflow.
 
