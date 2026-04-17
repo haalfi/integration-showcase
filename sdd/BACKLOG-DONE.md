@@ -1,5 +1,15 @@
 # Completed Backlog Items
 
+- [x] **IS-008 -- Workflow-level span attributes**
+  Added `trace` + `set_envelope_span_attrs` imports to `workflow/order.py`
+  (inside `workflow.unsafe.imports_passed_through()`). After the `run_id` backfill,
+  `set_envelope_span_attrs` is called on `trace.get_current_span()` with a copy of the
+  envelope where `step_id="workflow"`, tagging the `RunWorkflow:OrderWorkflow` span
+  created by `TracingInterceptor` with all six required business attributes.
+  New integration test `tests/integration/test_workflow_span_attrs.py` verifies the span
+  carries `business_tx_id`, `workflow_id`, `run_id`, `step_id="workflow"`,
+  `payload_ref_sha256`, and `schema_version` when the workflow runs with `TracingInterceptor`.
+
 - [x] **IS-013 -- Service A `POST /order` returns 202 Accepted**
   Added `status_code=202` to `@app.post("/order")` in `service_a/app.py`.
   Renamed `test_returns_200_with_required_fields` → `test_returns_202_with_required_fields`
