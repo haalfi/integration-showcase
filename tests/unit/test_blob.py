@@ -183,6 +183,34 @@ class TestUploadMetadata:
         upload(b"payload", "meta/empty.bin", metadata={})
         assert calls == [("meta/empty.bin", {})]
 
+    def test_metadata_setter_failure_propagates_after_store_write(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A raising _metadata_setter must propagate; the prior store.write must still land.
+
+        The bypass runs *after* ``store.write`` so an Azure metadata-PUT failure
+        leaves a written-but-unlabelled blob. upload() intentionally does not
+        attempt rollback — Temporal activity retry re-runs the whole upload and
+        the overwrite=True write fixes both the bytes and the metadata PUT.
+        """
+        s = Store(MemoryBackend())
+
+        @contextmanager
+        def _factory() -> Generator[Store, None, None]:
+            yield s
+
+        monkeypatch.setattr(blob_module, "_store_factory", _factory)
+
+        def _boom(_path: str, _meta: dict[str, str]) -> None:
+            raise RuntimeError("metadata setter boom")
+
+        monkeypatch.setattr(blob_module, "_metadata_setter", _boom)
+
+        with pytest.raises(RuntimeError, match="metadata setter boom"):
+            upload(b"payload", "fail/blob.bin", metadata={"k": "v"})
+        # Write happened before the setter call, so the blob is persisted.
+        assert s.read_bytes("fail/blob.bin") == b"payload"
+
 
 class TestDownload:
     def test_roundtrip(self, store: Store) -> None:

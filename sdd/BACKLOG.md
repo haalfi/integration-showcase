@@ -72,16 +72,25 @@ then small-wins, then the substantive code work, then cleanup.
 
 - [ ] **BK-005 -- Remove direct Azure SDK bypass in `shared/blob.py`**
   IS-014 added `_set_azure_blob_metadata()` which opens its own `BlobServiceClient` to call
-  `set_blob_metadata()`. This violates `DESIGN.md § remote-store usage` ("Blob I/O goes
-  through remote-store's Store API — never raw Azure SDK calls"), because remote-store
-  v0.23.0 has no metadata channel on `Store.write()` and `AzureBackend.unwrap()` only
-  exposes `FileSystemClient` (DataLake/HNS) — not `ContainerClient`/`BlobServiceClient`.
+  `set_blob_metadata()`. This violates `DESIGN.md § remote-store usage` (Blob I/O goes
+  through remote-store's Store API by default; raw Azure SDK calls are forbidden except
+  for this one documented deviation), because remote-store v0.23.0 has no metadata channel
+  on `Store.write()` and `AzureBackend.unwrap()` only exposes `FileSystemClient`
+  (DataLake/HNS) — not `ContainerClient`/`BlobServiceClient`.
   Follow the upstream remote-store changelog. When either (a) `Store.write()` grows a
   `metadata=` kwarg, or (b) `AzureBackend.unwrap()` starts returning
   `BlobServiceClient`/`ContainerClient`, delete `_set_azure_blob_metadata()` and route the
   metadata write through remote-store. Update the `DESIGN.md` carve-out and this item's
   acceptance: no direct Azure SDK usage in `shared/blob.py`; integration test
   `test_metadata_roundtrip_from_azurite` still passes unchanged.
+  **Known limitation — `run_id=""` on ingress blob:** Service A writes
+  `workflows/{business_tx_id}/input.json` before `start_workflow` returns, so the blob's
+  `run_id` metadata is always `""`. Temporal provides the real `run_id` only via the
+  returned handle, after the blob has been persisted. A second `set_blob_metadata` PUT
+  after start_workflow would patch it, but that doubles the Azure round-trip on the
+  ingress hot path for metadata no operator queries today. Accepted: the ingress blob's
+  `run_id` stays empty; all subsequent per-step blobs carry the real `run_id` via
+  `envelope.blob_metadata()`. Revisit if/when a metadata-driven lookup needs it.
 
 - [ ] **BK-004 -- Business attrs on `store.*` spans**
   All `otel_observe`-wrapped blob spans (currently `store.write`, `store.read_bytes`,

@@ -81,7 +81,8 @@ Temporal retries." Compensation activities deviate in one controlled way:
 
 ## remote-store usage
 
-- Blob I/O goes through `remote-store`'s `Store` API -- never raw Azure SDK calls.
+- Blob I/O goes through `remote-store`'s `Store` API by default; raw Azure SDK calls
+  are forbidden except for the one documented deviation below (BK-005).
 - Store URL is read from the `STORE_URL` env var.
 - Local dev uses Azurite connection string (`UseDevelopmentStorage=true`).
 - Backend switching requires no code changes.

@@ -16,11 +16,14 @@ import hashlib
 import os
 from collections.abc import Callable
 
+from opentelemetry import trace
 from remote_store import Capability, Store
 from remote_store.backends import AzureBackend
 from remote_store.ext.otel import otel_observe
 
 from integration_showcase.shared.envelope import BlobRef
+
+_tracer = trace.get_tracer(__name__)
 
 
 def _make_store() -> Store:
@@ -66,7 +69,7 @@ _store_factory: Callable[[], Store] = _make_store
 _metadata_setter: Callable[[str, dict[str, str]], None] = _set_azure_blob_metadata
 
 
-def upload(data: bytes, path: str, metadata: dict[str, str] | None = None) -> BlobRef:
+def upload(data: bytes, path: str, *, metadata: dict[str, str] | None = None) -> BlobRef:
     """Write *data* to *path* in the blob store and return a ``BlobRef``.
 
     ``sha256`` is computed before upload.  Overwrites an existing blob at
@@ -77,7 +80,8 @@ def upload(data: bytes, path: str, metadata: dict[str, str] | None = None) -> Bl
         path: Store-relative path, e.g. ``workflows/tx-001/input.json``.
         metadata: Optional Azure blob metadata (e.g.
             :meth:`Envelope.blob_metadata`). Applied after the write via the
-            Azure SDK directly — see :func:`_set_azure_blob_metadata`.
+            Azure SDK directly — see :func:`_set_azure_blob_metadata`. Keyword-only
+            per DESIGN.md §3 (behavior flags are keyword-only).
 
     Returns:
         ``BlobRef`` with ``blob_url=path`` and the hex SHA-256 digest.
@@ -89,7 +93,14 @@ def upload(data: bytes, path: str, metadata: dict[str, str] | None = None) -> Bl
         # ``is not None``: an empty dict must still reach the SDK so a caller
         # can deliberately clear existing Azure blob metadata.
         if metadata is not None:
-            _metadata_setter(path, metadata)
+            # The Azure SDK bypass sidesteps ``otel_observe``'s ``Store`` wrapper,
+            # so emit a sibling ``store.set_metadata`` span here. Keeps the
+            # metadata PUT visible in Jaeger alongside the ``store.write`` span.
+            with _tracer.start_as_current_span(
+                "store.set_metadata",
+                attributes={"store.path": path, "store.metadata_keys": sorted(metadata)},
+            ):
+                _metadata_setter(path, metadata)
         if store.supports(Capability.METADATA):
             etag = store.get_file_info(path).etag or ""
     return BlobRef(blob_url=path, sha256=sha256, etag=etag)
