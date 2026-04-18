@@ -19,10 +19,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from remote_store import NotFound, Store
 from remote_store.backends import MemoryBackend
 
+import integration_showcase.service_c.activities as svc_c_module
 import integration_showcase.shared.blob as blob_module
 import integration_showcase.shared.db as db_module
 from integration_showcase.service_c.activities import (
     InsufficientFundsError,
+    PaymentGatewayError,
     charge_payment,
     refund_payment,
 )
@@ -224,6 +226,85 @@ class TestActivitySpanAttributes:
         assert attrs["business_tx_id"] == env.business_tx_id
         assert attrs["step_id"] == env.step_id
         assert attrs["payload_ref_sha256"] == env.payload_ref.sha256
+
+
+# ---------------------------------------------------------------------------
+# IS-012: FORCE_PAYMENT_TRANSIENT_FAILS tests
+# ---------------------------------------------------------------------------
+
+
+class TestTransientFailures:
+    """FORCE_PAYMENT_TRANSIENT_FAILS=N raises PaymentGatewayError on attempts 1..N."""
+
+    @pytest.mark.parametrize("attempt", [1, 2])
+    def test_transient_raises_on_early_attempts(
+        self,
+        memory_store: Store,
+        db_conn: sqlite3.Connection,  # noqa: ARG002
+        monkeypatch: pytest.MonkeyPatch,
+        attempt: int,
+    ) -> None:
+        monkeypatch.setenv("FORCE_PAYMENT_TRANSIENT_FAILS", "2")
+        monkeypatch.setattr(svc_c_module, "_get_attempt", lambda: attempt)
+        env = _make_inventory_envelope(["w"], tx=f"tx-transient-{attempt}")
+
+        with pytest.raises(PaymentGatewayError, match="gateway_timeout"):
+            charge_payment(env)
+
+    def test_transient_clears_on_final_attempt_success(
+        self,
+        memory_store: Store,
+        db_conn: sqlite3.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Attempt N+1 succeeds when FORCE_PAYMENT_FAILURE is not set."""
+        monkeypatch.setenv("FORCE_PAYMENT_TRANSIENT_FAILS", "2")
+        monkeypatch.setattr(svc_c_module, "_get_attempt", lambda: 3)
+        env = _make_inventory_envelope(["w"], tx="tx-transient-success")
+
+        ref = charge_payment(env)
+        assert memory_store.read_bytes(ref.blob_url)
+
+    def test_transient_then_insufficient_funds(
+        self,
+        memory_store: Store,
+        db_conn: sqlite3.Connection,  # noqa: ARG002
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Attempt N+1 raises InsufficientFundsError when FORCE_PAYMENT_FAILURE=true."""
+        monkeypatch.setenv("FORCE_PAYMENT_TRANSIENT_FAILS", "2")
+        monkeypatch.setenv("FORCE_PAYMENT_FAILURE", "true")
+        monkeypatch.setattr(svc_c_module, "_get_attempt", lambda: 3)
+        env = _make_inventory_envelope(["w"], tx="tx-transient-fail")
+
+        with pytest.raises(InsufficientFundsError, match="Payment declined"):
+            charge_payment(env)
+
+    def test_zero_transient_fails_is_default_behavior(
+        self,
+        memory_store: Store,
+        db_conn: sqlite3.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """FORCE_PAYMENT_TRANSIENT_FAILS=0 (default) must not affect normal flow."""
+        monkeypatch.setenv("FORCE_PAYMENT_TRANSIENT_FAILS", "0")
+        env = _make_inventory_envelope(["w"], tx="tx-transient-zero")
+
+        ref = charge_payment(env)
+        assert memory_store.read_bytes(ref.blob_url)
+
+    def test_invalid_env_var_treated_as_zero(
+        self,
+        memory_store: Store,
+        db_conn: sqlite3.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Non-integer FORCE_PAYMENT_TRANSIENT_FAILS must not crash; treated as 0."""
+        monkeypatch.setenv("FORCE_PAYMENT_TRANSIENT_FAILS", "not-a-number")
+        env = _make_inventory_envelope(["w"], tx="tx-transient-invalid")
+
+        ref = charge_payment(env)
+        assert memory_store.read_bytes(ref.blob_url)
 
 
 # ---------------------------------------------------------------------------

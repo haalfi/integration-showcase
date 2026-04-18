@@ -1,5 +1,21 @@
 # Completed Backlog Items
 
+- [x] **IS-012 -- Retry-then-fail payment path**
+  Added `PaymentGatewayError` (retryable) and `_get_attempt()` seam to
+  `service_c/activities.py`. `FORCE_PAYMENT_TRANSIENT_FAILS=N` env var causes
+  `charge_payment` to raise `PaymentGatewayError` on attempts 1..N; attempt N+1
+  then either succeeds or raises `InsufficientFundsError` depending on
+  `FORCE_PAYMENT_FAILURE`. `_PAYMENT_RETRY` in `order.py` was already correct
+  (`maximum_attempts=3`, 2 s initial, `backoff_coefficient=2.0`,
+  `non_retryable_error_types=["InsufficientFundsError"]`); no workflow changes
+  needed. Demo usage: set both env vars on the Service C worker process.
+  Unit tests: `TestTransientFailures` in `test_service_c.py` (early attempts,
+  final-attempt success, final-attempt non-retryable, zero default, invalid value).
+  Integration test: `test_retry_then_fail_payment_path_triggers_compensation` in
+  `tests/integration/test_workflow_routing.py` — stub records 3 call-count attempts
+  (2 retryable + 1 terminal) and asserts compensation ran. Trace acceptance (Jaeger
+  exponential-backoff spacing) is a live-demo check.
+
 - [x] **IS-011 -- Full compensation tree**
   Added `refund_payment` activity to `service_c/activities.py` (orphan-tombstone pattern,
   `compensate.charge-payment` step, `refunded_at TEXT` column added to the existing

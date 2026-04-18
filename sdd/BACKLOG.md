@@ -35,18 +35,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 Ordered by recommended execution: concept-first (sets the acceptance bar),
 then small-wins, then the substantive code work, then cleanup.
 
-- [ ] **IS-012 -- Retry-then-fail payment path**
-  Concept §5.2 sequence shows attempt 1 = `gateway_timeout` (retryable) -> attempt 2 =
-  `insufficient_funds` (non-retryable). The retry policy is wired correctly
-  (`OrderWorkflow._PAYMENT_RETRY` at `workflow/order.py:34-39`: `maximum_attempts=3`, 2s
-  initial interval, `backoff_coefficient=2.0`); the gap is in the forced-failure mode, which
-  raises the non-retryable `InsufficientFundsError` on attempt 1, so Temporal skips retries
-  by policy and the §5.2 retry-then-fail sequence is never exercised. Add
-  `FORCE_PAYMENT_TRANSIENT_FAILS=N` env: first N attempts raise a retryable
-  `PaymentGatewayError`; attempt N+1 either succeeds or raises `InsufficientFundsError`
-  depending on `FORCE_PAYMENT_FAILURE`. Acceptance: trace shows two failed attempts + one
-  terminal attempt with exponential-backoff spacing visible in Jaeger.
-
 - [ ] **BK-003 -- BlobRef.version_id field hygiene**
   `BlobRef.etag` is now populated from `Store.get_file_info()` post-write (IS-010).
   `BlobRef.version_id` remains `""` — Azure blob versioning is not enabled in this

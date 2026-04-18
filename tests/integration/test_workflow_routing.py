@@ -331,3 +331,95 @@ async def test_shipment_failure_triggers_two_step_reverse_compensation() -> None
             break
         cause = getattr(cause, "cause", None)
     assert cause is not None, "ShipmentError not found in WorkflowFailureError cause chain"
+
+
+@pytest.mark.integration
+async def test_retry_then_fail_payment_path_triggers_compensation() -> None:
+    """§5.2 retry-then-fail: charge_payment raises retryable PaymentGatewayError on
+    attempts 1-2, then non-retryable InsufficientFundsError on attempt 3.
+    Compensation must still run (compensate_reserve_inventory on TASK_QUEUE_B).
+
+    This is the acceptance test for IS-012: the workflow must not short-circuit
+    compensation just because payment was retried before failing terminally.
+    """
+    charge_attempts: list[int] = []
+    compensate_calls: list[bool] = []
+
+    @activity.defn(name="charge_payment")
+    def _stub_charge_retry_then_fail(_env: Envelope) -> BlobRef:
+        charge_attempts.append(1)
+        attempt = len(charge_attempts)
+        if attempt <= 2:
+            raise ApplicationError(
+                f"gateway_timeout on attempt {attempt}",
+                type="PaymentGatewayError",
+                non_retryable=False,
+            )
+        raise ApplicationError(
+            "insufficient funds", type="InsufficientFundsError", non_retryable=True
+        )
+
+    @activity.defn(name="compensate_reserve_inventory")
+    def _stub_compensate_tracking(_env: Envelope) -> BlobRef:
+        compensate_calls.append(True)
+        return _STUB_REF
+
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter,
+    ) as env:
+        client = env.client
+        with ThreadPoolExecutor() as executor:
+            async with (
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE,
+                    workflows=[OrderWorkflow],
+                    activities=[
+                        _poison_reserve,
+                        _poison_charge,
+                        _poison_dispatch,
+                        _poison_compensate,
+                        _poison_refund,
+                    ],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_B,
+                    activities=[_stub_reserve, _stub_compensate_tracking],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_C,
+                    activities=[_stub_charge_retry_then_fail, _stub_refund],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_D,
+                    activities=[_stub_dispatch],
+                    activity_executor=executor,
+                ),
+            ):
+                with pytest.raises(WorkflowFailureError) as exc_info:
+                    await client.execute_workflow(
+                        OrderWorkflow.run,
+                        _start_envelope(tx="routing-test-004"),
+                        id="test-routing-retry-then-fail-001",
+                        task_queue=TASK_QUEUE,
+                    )
+
+    assert len(charge_attempts) == 3, (
+        f"Expected 3 charge_payment attempts (2 retryable + 1 terminal), got {len(charge_attempts)}"
+    )
+    assert compensate_calls, (
+        "compensate_reserve_inventory must be invoked after terminal payment failure"
+    )
+
+    cause: BaseException | None = exc_info.value
+    while cause is not None:
+        if isinstance(cause, ApplicationError) and cause.type == "InsufficientFundsError":
+            break
+        cause = getattr(cause, "cause", None)
+    assert cause is not None, "InsufficientFundsError not found in WorkflowFailureError cause chain"

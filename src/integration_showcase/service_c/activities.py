@@ -7,6 +7,12 @@ persists payment state in a private SQLite DB keyed on
 Set ``FORCE_PAYMENT_FAILURE=true`` to trigger ``InsufficientFundsError``,
 which is non-retryable in ``OrderWorkflow`` and drives compensation.
 
+Set ``FORCE_PAYMENT_TRANSIENT_FAILS=N`` to raise a retryable
+``PaymentGatewayError`` on the first N attempts; attempt N+1 then either
+succeeds or raises ``InsufficientFundsError`` depending on
+``FORCE_PAYMENT_FAILURE``.  Demonstrates the §5.2 retry-then-fail sequence
+with exponential-backoff spacing visible in Jaeger (IS-012).
+
 ``refund_payment`` compensates a prior ``charge_payment``. It follows the
 same orphan-tombstone pattern as ``compensate_reserve_inventory``: if no
 payment row is found the activity inserts a tombstone so retries are no-ops.
@@ -33,6 +39,18 @@ from integration_showcase.shared.otel import instrument_activity
 
 class InsufficientFundsError(Exception):
     """Non-retryable: payment declined due to insufficient funds."""
+
+
+class PaymentGatewayError(Exception):
+    """Retryable: transient gateway failure (timeout, network error, etc.)."""
+
+
+def _get_attempt() -> int:
+    """Return the current Temporal activity attempt number (1-based).
+
+    Module-level seam so unit tests can monkeypatch without a live Temporal context.
+    """
+    return activity.info().attempt
 
 
 _DB_PATH_ENV = "SERVICE_C_DB_PATH"
@@ -80,6 +98,17 @@ def charge_payment(envelope: Envelope) -> BlobRef:
     """
     input_bytes = blob.download(envelope.payload_ref)
     input_data = json.loads(input_bytes)
+
+    try:
+        transient_n = int(os.environ.get("FORCE_PAYMENT_TRANSIENT_FAILS", "0"))
+    except ValueError:
+        transient_n = 0
+    if transient_n > 0:
+        attempt = _get_attempt()
+        if attempt <= transient_n:
+            raise PaymentGatewayError(
+                f"gateway_timeout on attempt {attempt} for business_tx_id={envelope.business_tx_id}"
+            )
 
     if os.environ.get("FORCE_PAYMENT_FAILURE", "").lower() == "true":
         raise InsufficientFundsError(
