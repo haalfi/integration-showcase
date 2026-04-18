@@ -12,6 +12,12 @@ Set ``FORCE_PAYMENT_TRANSIENT_FAILS=N`` to raise a retryable
 succeeds or raises ``InsufficientFundsError`` depending on
 ``FORCE_PAYMENT_FAILURE``.  Demonstrates the §5.2 retry-then-fail sequence
 with exponential-backoff spacing visible in Jaeger (IS-012).
+**Warning:** N must be strictly less than ``_PAYMENT_RETRY.maximum_attempts``
+(currently 3).  Setting ``N >= maximum_attempts`` means the terminal attempt
+also raises ``PaymentGatewayError``, which Temporal exhausts retries on; the
+workflow still compensates (``except Exception`` catches it) but the root
+cause type in the failure history will be ``PaymentGatewayError`` rather than
+``InsufficientFundsError``.
 
 ``refund_payment`` compensates a prior ``charge_payment``. It follows the
 same orphan-tombstone pattern as ``compensate_reserve_inventory``: if no
@@ -85,16 +91,20 @@ def _db_path() -> str:
 def charge_payment(envelope: Envelope) -> BlobRef:
     """Charge payment. Idempotent per ``envelope.idempotency_key``.
 
-    ``blob.download`` runs before the failure check so that the demo trace
-    in Jaeger shows a ``blob.get`` child span under the failed
-    ``charge_payment`` span, aligning with §5.2's pattern of a blob GET
-    preceding the payment error.  Note: §5.2's full retry-then-fail sequence
-    (attempt 1 = gateway_timeout, attempt 2 = insufficient_funds) is tracked
-    separately by IS-012.  A blob-store outage will surface as a retryable
-    error rather than the deterministic ``InsufficientFundsError``; the
-    previous guarantee ("failure check runs before any I/O") no longer holds.
-    ``InsufficientFundsError`` remains the workflow's non-retryable signal
-    to start compensation when the blob store is healthy.
+    ``blob.download`` runs before both the transient-fail guard
+    (``FORCE_PAYMENT_TRANSIENT_FAILS``) and the hard-fail guard
+    (``FORCE_PAYMENT_FAILURE``), so that every attempt — including retried
+    ones — shows a ``blob.get`` child span in Jaeger beneath the
+    ``charge_payment`` span.  This aligns with §5.2's trace shape (blob GET
+    precedes the payment decision) on all paths.  Side-effect: on transient-fail
+    retries Jaeger shows ``blob.get`` → ``gateway_timeout``; a reader should
+    interpret that as "the blob was fetched, then the gateway decision
+    fired", not as the blob call causing the timeout.  A blob-store outage on
+    any attempt will surface as a retryable error rather than the deterministic
+    ``InsufficientFundsError``; the previous guarantee ("failure check runs
+    before any I/O") no longer holds.  ``InsufficientFundsError`` remains the
+    workflow's non-retryable signal to start compensation when the blob store
+    is healthy.
     """
     input_bytes = blob.download(envelope.payload_ref)
     input_data = json.loads(input_bytes)

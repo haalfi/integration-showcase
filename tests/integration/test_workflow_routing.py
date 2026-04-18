@@ -16,6 +16,7 @@ test server.
 
 from __future__ import annotations
 
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -34,7 +35,10 @@ from integration_showcase.shared.constants import (
     TASK_QUEUE_D,
 )
 from integration_showcase.shared.envelope import BlobRef, Envelope
-from integration_showcase.workflow.order import OrderWorkflow
+from integration_showcase.workflow.order import (
+    _PAYMENT_RETRY,
+    OrderWorkflow,
+)
 
 # ---------------------------------------------------------------------------
 # Shared stub helpers
@@ -344,12 +348,20 @@ async def test_retry_then_fail_payment_path_triggers_compensation() -> None:
     """
     charge_attempts: list[int] = []
     compensate_calls: list[bool] = []
+    # Lock guards append+len so the stub is safe if the executor ever dispatches
+    # concurrent calls. Temporal retries sync activities sequentially today, but
+    # the lock makes the assumption explicit rather than invisible.
+    _counter_lock = threading.Lock()
 
     @activity.defn(name="charge_payment")
     def _stub_charge_retry_then_fail(_env: Envelope) -> BlobRef:
-        charge_attempts.append(1)
-        attempt = len(charge_attempts)
-        if attempt <= 2:
+        with _counter_lock:
+            charge_attempts.append(1)
+            attempt = len(charge_attempts)
+        # Retryable on attempts 1..(maximum_attempts-1); terminal on maximum_attempts.
+        # The guard mirrors _PAYMENT_RETRY.maximum_attempts so that a change to the
+        # retry budget in order.py forces an update here rather than silently breaking.
+        if attempt < _PAYMENT_RETRY.maximum_attempts:
             raise ApplicationError(
                 f"gateway_timeout on attempt {attempt}",
                 type="PaymentGatewayError",
@@ -410,8 +422,10 @@ async def test_retry_then_fail_payment_path_triggers_compensation() -> None:
                         task_queue=TASK_QUEUE,
                     )
 
-    assert len(charge_attempts) == 3, (
-        f"Expected 3 charge_payment attempts (2 retryable + 1 terminal), got {len(charge_attempts)}"
+    expected = _PAYMENT_RETRY.maximum_attempts
+    assert len(charge_attempts) == expected, (
+        f"Expected {expected} charge_payment attempts ({expected - 1} retryable + 1 terminal),"
+        f" got {len(charge_attempts)}"
     )
     assert compensate_calls, (
         "compensate_reserve_inventory must be invoked after terminal payment failure"

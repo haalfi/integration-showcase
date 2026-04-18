@@ -306,6 +306,25 @@ class TestTransientFailures:
         ref = charge_payment(env)
         assert memory_store.read_bytes(ref.blob_url)
 
+    def test_transient_n_equals_maximum_attempts_still_raises_on_last_attempt(
+        self,
+        memory_store: Store,
+        db_conn: sqlite3.Connection,  # noqa: ARG002
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """N >= maximum_attempts footgun: the terminal attempt still raises PaymentGatewayError.
+
+        The workflow compensates anyway (its except catches all errors), but the root-cause
+        type in the failure history is PaymentGatewayError rather than InsufficientFundsError.
+        This test documents the behaviour so the footgun is visible in the test suite.
+        """
+        monkeypatch.setenv("FORCE_PAYMENT_TRANSIENT_FAILS", "3")  # N == maximum_attempts
+        monkeypatch.setattr(svc_c_module, "_get_attempt", lambda: 3)  # the "final" attempt
+        env = _make_inventory_envelope(["w"], tx="tx-transient-footgun")
+
+        with pytest.raises(PaymentGatewayError, match="gateway_timeout"):
+            charge_payment(env)
+
 
 # ---------------------------------------------------------------------------
 # refund_payment helpers
