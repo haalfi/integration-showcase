@@ -1,5 +1,22 @@
 # Completed Backlog Items
 
+- [x] **IS-016 -- User-facing docs tree (Diataxis)**
+  Added `docs/` with a Diataxis-structured, language-agnostic documentation set
+  (German). Layout: `konzept.md` as the normative frame, `reference/` (fields,
+  rules, correlation attributes, error taxonomy), `guides/` (Temporal, Blob,
+  OTel task-oriented how-tos), `guides-python/` (short pointers into the
+  showcase code), `explanation/` (why envelope-over-raw-payload grounded in
+  security/governance/GDPR; why business_tx_id is not a metric label). The
+  adapted concept in `docs/konzept.md` becomes the new public reference: drops
+  the Python-specific and remote-store-specific notes from
+  `sdd/research/research-temporal-azure-otel-orchestration.md`, drops the
+  production-hardening chapter, merges the §3 envelope section with the §7
+  field glossary, and converts the §6 traceability checklist into normative
+  rules. The `sdd/research/` concept remains as the internal research
+  artifact. Style: Denglish (Entry Service, Task Queue, raw payload, Trace
+  Context) over German compounds, no em dashes, no arrows in narrative text
+  or Mermaid node labels, colons in place of em dashes.
+
 - [x] **BK-007 -- Preserve shipment-trigger context when compensation fails**
   Fixed two observability gaps in `workflow/order.py` step 3:
   **Gap A:** Added OTel span event `compensation.triggered` (with `error.type`) at the start
