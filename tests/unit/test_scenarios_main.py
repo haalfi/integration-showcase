@@ -13,6 +13,7 @@ from temporalio.exceptions import ApplicationError
 
 import scenarios._common as common_module
 import scenarios.run_happy as run_happy
+import scenarios.run_shipment_failure as run_shipment_failure
 import scenarios.run_unhappy as run_unhappy
 
 _BUSINESS_TX_ID = "tx-test-123"
@@ -155,6 +156,47 @@ class TestRunUnhappyMain:
         _stub_await_workflow(monkeypatch, run_unhappy, result=None, exc=wrapper)
 
         assert await run_unhappy.main() == 1
+
+
+class TestRunShipmentFailureMain:
+    async def test_returns_0_when_expected_failure_in_cause_chain(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        patch_argv: None,  # noqa: ARG002
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        app_err = ApplicationError("carrier unavailable", type="ShipmentError")
+        wrapper = _WorkflowFailureError(app_err)
+        _stub_post_order(monkeypatch, run_shipment_failure)
+        _stub_await_workflow(monkeypatch, run_shipment_failure, result=None, exc=wrapper)
+
+        rc = await run_shipment_failure.main()
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Expected failure observed: ShipmentError" in out
+
+    async def test_returns_1_when_workflow_succeeds(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        patch_argv: None,  # noqa: ARG002
+    ) -> None:
+        _stub_post_order(monkeypatch, run_shipment_failure)
+        _stub_await_workflow(monkeypatch, run_shipment_failure, result=_BUSINESS_TX_ID, exc=None)
+
+        assert await run_shipment_failure.main() == 1
+
+    async def test_returns_1_when_unexpected_exception_type(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        patch_argv: None,  # noqa: ARG002
+    ) -> None:
+        other_err = ApplicationError("payment declined", type="InsufficientFundsError")
+        wrapper = _WorkflowFailureError(other_err)
+        _stub_post_order(monkeypatch, run_shipment_failure)
+        _stub_await_workflow(monkeypatch, run_shipment_failure, result=None, exc=wrapper)
+
+        assert await run_shipment_failure.main() == 1
 
 
 class TestCommonModuleUnaffected:

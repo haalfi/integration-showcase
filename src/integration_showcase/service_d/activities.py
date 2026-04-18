@@ -4,6 +4,9 @@ Reads the payment receipt blob, dispatches a shipment, persists shipment
 state in a private SQLite DB keyed on ``envelope.idempotency_key``, and
 uploads a confirmation blob.
 
+Set ``FORCE_SHIPMENT_FAILURE=true`` to trigger ``ShipmentError``, which
+drives two-step reverse compensation (refund then release reservation).
+
 This activity is ``def`` (not ``async def``) because it does blocking
 I/O; the worker registers it with an ``activity_executor``
 ``ThreadPoolExecutor`` so blocking calls don't starve the Temporal event
@@ -22,6 +25,11 @@ from temporalio import activity
 from integration_showcase.shared import blob, db
 from integration_showcase.shared.envelope import BlobRef, Envelope
 from integration_showcase.shared.otel import instrument_activity
+
+
+class ShipmentError(Exception):
+    """Non-retryable: shipment dispatch failed (e.g. carrier rejected the order)."""
+
 
 _DB_PATH_ENV = "SERVICE_D_DB_PATH"
 _DEFAULT_DB_PATH = "./tmp/service_d.db"
@@ -48,9 +56,17 @@ def _db_path() -> str:
 @activity.defn(name="dispatch_shipment")
 @instrument_activity
 def dispatch_shipment(envelope: Envelope) -> BlobRef:
-    """Dispatch shipment. Idempotent per ``envelope.idempotency_key``."""
+    """Dispatch shipment. Idempotent per ``envelope.idempotency_key``.
+
+    Set ``FORCE_SHIPMENT_FAILURE=true`` to raise ``ShipmentError`` after the
+    blob download, driving the two-step reverse compensation path in
+    ``OrderWorkflow`` (refund_payment first, then compensate_reserve_inventory).
+    """
     input_bytes = blob.download(envelope.payload_ref)
     input_data = json.loads(input_bytes)
+
+    if os.environ.get("FORCE_SHIPMENT_FAILURE", "").lower() == "true":
+        raise ShipmentError(f"Shipment failed for business_tx_id={envelope.business_tx_id}")
     charge_id = input_data["charge_id"]
 
     with db.connect(_db_path()) as conn:

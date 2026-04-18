@@ -1,5 +1,23 @@
 # Completed Backlog Items
 
+- [x] **IS-011 -- Full compensation tree**
+  Added `refund_payment` activity to `service_c/activities.py` (orphan-tombstone pattern,
+  `compensate.charge-payment` step, `refunded_at TEXT` column added to the existing
+  `payments` table; mirrors `compensate_reserve_inventory` from Service B). Extended `OrderWorkflow` to wrap
+  `dispatch_shipment` in a try/except that runs two-step reverse-order compensation on
+  any failure: `refund_payment` (TASK_QUEUE_C) then `compensate_reserve_inventory`
+  (TASK_QUEUE_B). Added `refund_payment_envelope()` helper to `workflow/envelopes.py` as
+  single source of truth for the compensation idempotency key. Added `FORCE_SHIPMENT_FAILURE`
+  env var to `service_d/activities.py` to drive the path in demos. Added scenario script
+  `scenarios/run_shipment_failure.py` (registered as `hatch run scenario-shipment-failure`).
+  Unit tests: `TestRefundPayment` in `test_service_c.py` (normal, orphan, idempotent retry);
+  `test_refund_payment_routes_to_task_queue_c` in `test_workflow_routing.py`.
+  Behavioural integration test: `test_shipment_failure_triggers_two_step_reverse_compensation`
+  in `tests/integration/test_workflow_routing.py` proves both compensations reach their
+  correct service queues (poison stubs on TASK_QUEUE would catch any misrouting).
+  Jaeger span tree acceptance (concept §5.4) is a live-demo check; verified structurally
+  by integration test routing coverage.
+
 - [x] **IS-014 -- Blob metadata via remote-store (correlation attrs on payload blobs)**
   `shared/blob.upload()` now accepts a `metadata: dict[str, str] | None` kwarg and forwards
   it to Azure Blob Storage. remote-store v0.23.0 has no metadata channel on `Store.write()`

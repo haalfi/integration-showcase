@@ -1,4 +1,4 @@
-"""Temporal worker for Service C -- registers the payment activity.
+"""Temporal worker for Service C -- registers payment and refund activities.
 
 Run with::
 
@@ -20,7 +20,7 @@ from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
-from integration_showcase.service_c.activities import charge_payment
+from integration_showcase.service_c.activities import charge_payment, refund_payment
 from integration_showcase.shared.constants import TASK_QUEUE_C
 from integration_showcase.shared.otel import setup_tracing
 
@@ -39,7 +39,7 @@ async def main() -> None:
         worker = Worker(
             client,
             task_queue=TASK_QUEUE_C,
-            activities=[charge_payment],
+            activities=[charge_payment, refund_payment],
             activity_executor=executor,
         )
         await worker.run()

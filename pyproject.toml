@@ -51,6 +51,7 @@ test-cov = "pytest --cov=integration_showcase --cov=scenarios --cov-report=term-
 all = ["lint", "format-check", "test-cov"]
 scenario-happy = "python -m scenarios.run_happy"
 scenario-unhappy = "python -m scenarios.run_unhappy"
+scenario-shipment-failure = "python -m scenarios.run_shipment_failure"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/integration_showcase"]
