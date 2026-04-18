@@ -12,7 +12,12 @@ Was eine korrekte Schreib-Operation garantiert:
 2. Die Referenz enthält `blob_url` und `sha256`; der Hash ist **vor** dem
    Upload berechnet.
 3. Das Blob trägt die Storage-seitigen Korrelations-Metadaten.
-4. Derselbe `blob_url` wird **nie überschrieben** (write-once).
+4. Innerhalb eines Saga-Laufs wird derselbe `blob_url` nicht mit
+   **abweichendem** Inhalt überschrieben. Retries dürfen denselben
+   Inhalt unter demselben Pfad erneut schreiben (Idempotenz durch
+   deterministische Hashes). Storage-seitig ist Overwrite erlaubt;
+   die Write-once-Semantik ist eine fachliche Disziplin, keine
+   Enforcement durch das Backend (Regel B-7).
 
 ## Ablauf
 

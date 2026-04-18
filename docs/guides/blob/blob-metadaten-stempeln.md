@@ -38,10 +38,26 @@ flowchart LR
     M --> U
 ```
 
-Die Metadaten werden **zusammen** mit den Bytes geschrieben, in einer
-einzigen Operation. Zweistufige Writes (Bytes, dann Metadata-Patch)
-doppeln die Round-Trips und riskieren inkonsistente Zustände bei
-Fehlschlag zwischen den Schritten.
+Idealerweise werden Bytes und Metadaten **zusammen** geschrieben, in
+einer einzigen Operation. Zweistufige Writes (Bytes, dann
+Metadata-Patch) doppeln die Round-Trips und riskieren inkonsistente
+Zustände bei Fehlschlag zwischen den Schritten.
+
+Wenn das Backend-SDK auf dem Write-Pfad **keinen** Metadata-Kanal
+anbietet, ist ein nachgelagerter Metadata-PUT unvermeidlich. In dem
+Fall:
+
+- Den Schreibfehler zwischen Bytes-PUT und Metadata-PUT als transienten
+  Fehler propagieren; ein Retry schreibt denselben Content (B-7) und
+  setzt die Metadaten erneut.
+- Das Activity-Interface muss idempotent bleiben, damit ein Retry nicht
+  zu einem Blob ohne Metadata führt.
+
+> **Hinweis zur Python-Implementierung.** `shared/blob.py` schreibt
+> Bytes und Metadaten in zwei Schritten: `store.write(...)` gefolgt von
+> einem separaten Azure-SDK-Call (`set_blob_metadata`). Das ist ein
+> bekanntes, temporäres Abweichen (BK-005) bis remote-store eine native
+> Metadata-API auf `Store.write()` liefert.
 
 ## Readback
 
@@ -71,8 +87,9 @@ Storage Backends normalisieren Metadata-Keys uneinheitlich. Regeln:
 
 ## Häufige Fehler
 
-- **Metadata-Patch nach dem Upload.** Doppelter Round-Trip; bei Fehlern
-  zwischen Put und Patch bleibt ein Blob ohne Stempel.
+- **Metadata-Patch nach dem Upload ohne Not.** Doppelter Round-Trip,
+  ohne Gewinn. Nur akzeptabel, wenn das Backend keine Metadata-API auf
+  dem Write-Pfad anbietet (siehe Schreibpfad).
 - **Unterschiedliche Key-Namen pro Service.** Forensik bricht zusammen,
   sobald ein Service `stepId` statt `step_id` schreibt.
 - **PII in Metadata.** Werte landen in Listings, Logs, Metriken. Für

@@ -51,8 +51,8 @@ Standard-Set (die sechs Business-Attribute):
            bag = baggage_from_context(parent_context)
            for k in self.KEYS:
                v = bag.get(k)
-               if v:
-                   span.set_attribute(k, v)
+               if v is not None:
+                   span.set_attribute(k, str(v))
 
        def on_end(self, span):    pass
        def shutdown(self):        pass
@@ -86,8 +86,10 @@ with tracer.start_as_current_span("activity.X", context=ctx_with_baggage):
 
 - **Leere Strings als Baggage.** `run_id = ""` im Ingress-Span ist
   normal (Temporal hat noch keine vergeben). Der Processor filtert
-  leere Werte, damit Child-Spans nicht mit leeren Attributen
-  verschmutzt werden.
+  **nur** `None`, nicht leere Strings. Ein `run_id = ""` landet
+  bewusst als Span-Attribut; das macht die Abwesenheit des echten
+  Werts explizit sichtbar, statt das Attribut ganz wegzulassen.
+  Konsumenten der Telemetrie müssen mit `""` umgehen können.
 - **PII in Baggage.** Baggage wird über Service-Grenzen transportiert
   und landet potenziell in Fremd-Backends. Nur die sechs
   Business-Attribute gehören hinein.

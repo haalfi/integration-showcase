@@ -11,10 +11,25 @@ Volle Implementierung:
   Helfer auf, nicht das Backend-SDK direkt.
 - Drei Kernfunktionen:
   - `upload(store, blob_url, data, metadata)`: berechnet SHA-256,
-    schreibt Bytes plus Metadata in einer Operation, liefert `BlobRef`.
-  - `download(store, ref) -> bytes`: lädt und verifiziert `sha256`;
-    Mismatch ist ein non-retryable `IntegrityError`.
+    schreibt Bytes und Metadata in **zwei** Schritten (`store.write()`
+    gefolgt von einem separaten Azure-SDK-`set_blob_metadata`), liefert
+    `BlobRef`. Siehe BK-005 unten.
+  - `download(store, ref): bytes`: lädt und verifiziert `sha256`;
+    Mismatch wirft `ValueError` (ein dedizierter `IntegrityError` ist
+    nicht ausgerollt). Aktivitäten müssen `ValueError` in
+    `non_retryable_error_types` listen oder den Fehler in eine eigene
+    Fachklasse heben.
   - Metadata-Stempel (Teil von `upload`) gemäß `Envelope.blob_metadata()`.
+
+## BK-005: zweistufiger Write
+
+remote-store v0.23.0 bietet keinen Metadata-Kanal auf `Store.write()`.
+Bis upstream eine native API liefert, setzt `_set_azure_blob_metadata`
+die Blob-Metadaten mit dem Azure SDK direkt, **nach** dem
+`store.write`. Das ist eine bewusste, dokumentierte Abweichung von der
+sprachagnostischen Guideline (siehe
+[`guides/blob/blob-metadaten-stempeln.md`](../guides/blob/blob-metadaten-stempeln.md),
+Abschnitt „Schreibpfad").
 
 ## Integrität
 

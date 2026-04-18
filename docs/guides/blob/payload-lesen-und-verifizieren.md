@@ -23,7 +23,7 @@ flowchart TD
     H["sha256 über heruntergeladene Bytes"]
     C{"== envelope.sha256?"}
     D["Deserialisieren<br/>(content_type)"]
-    F["IntegrityError (non-retryable)"]
+    F["Integritätsfehler (non-retryable)"]
     G --> H --> C
     C -- ja --> D
     C -- nein --> F
@@ -40,10 +40,22 @@ flowchart TD
 3. **Abgleich.** Zeichenweiser Vergleich (oder `hmac.compare_digest`
    bzw. äquivalent).
 
-4. **Bei Mismatch.** Als `IntegrityError` oder vergleichbarer
-   Fehlertyp werfen, markiert als non-retryable. Retry würde denselben
-   korrupten Zustand liefern; die Ursache liegt entweder im Upload
-   oder im Storage selbst.
+4. **Bei Mismatch.** Als dedizierter Integritätsfehler werfen
+   (z. B. `IntegrityError`), markiert als non-retryable. Retry würde
+   denselben korrupten Zustand liefern; die Ursache liegt entweder im
+   Upload oder im Storage selbst.
+
+   Den **exakten** Klassennamen kennen: Temporal matcht
+   `non_retryable_error_types` über den voll qualifizierten Namen.
+   Wer `ValueError` als generischen Integritätsfehler wirft, muss
+   `ValueError` explizit in die Liste eintragen; sonst wird retryt.
+
+   > **Hinweis zur Python-Implementierung.** `shared/blob.download()`
+   > wirft bei Hash-Mismatch `ValueError`. Ein dedizierter
+   > `IntegrityError` existiert nicht. Aktivitäten, die `download`
+   > aufrufen, müssen `ValueError` in `non_retryable_error_types`
+   > listen oder den Fehler vor dem Aufrufer in eine eigene Fachklasse
+   > heben.
 
 5. **Bei Match.** Gegen `content_type` deserialisieren. Parse-Fehler
    sind ebenfalls non-retryable (Schema-Fehler, nicht transient).
