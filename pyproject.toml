@@ -49,6 +49,9 @@ typecheck = "mypy src/"
 test = "pytest"
 test-cov = "pytest --cov=integration_showcase --cov=scenarios --cov-report=term-missing --cov-fail-under=80"
 all = ["lint", "format-check", "test-cov"]
+demo-happy = "python -m scenarios.demo_happy"
+demo-unhappy = "python -m scenarios.demo_unhappy"
+demo-shipment-failure = "python -m scenarios.demo_shipment_failure"
 scenario-happy = "python -m scenarios.run_happy"
 scenario-unhappy = "python -m scenarios.run_unhappy"
 scenario-shipment-failure = "python -m scenarios.run_shipment_failure"
@@ -79,6 +82,11 @@ omit = [
   # Thin argparse + asyncio.run shells; the assertion logic lives in main()
   # and is covered via tests/unit/test_scenarios_main.py.
   "scenarios/__init__.py",
+  # Demo runners: thin subprocess orchestration shells with no assertion logic.
+  "scenarios/_demo.py",
+  "scenarios/demo_happy.py",
+  "scenarios/demo_unhappy.py",
+  "scenarios/demo_shipment_failure.py",
 ]
 
 [tool.ruff]
