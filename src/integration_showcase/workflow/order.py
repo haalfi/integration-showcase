@@ -4,6 +4,8 @@ Steps: reserve-inventory -> charge-payment -> dispatch-shipment.
 Payment failure triggers compensation of reserve-inventory (single step).
 Shipment failure triggers reverse-order two-step compensation:
   refund-payment first, then release-reservation.
+  If refund_payment exhausts its retry budget, compensate_reserve_inventory
+  still runs; the refund error is then re-raised as the workflow failure.
 """
 
 from __future__ import annotations
@@ -110,9 +112,7 @@ class OrderWorkflow:
 
         # Step 3: Dispatch shipment -- compensate payment then reservation on failure.
         # ShipmentError is non-retryable so compensation starts immediately (matches
-        # InsufficientFundsError / payment path UX). Known gap: if refund_payment
-        # exhausts _COMPENSATE_RETRY, compensate_reserve_inventory is never reached
-        # and the reservation remains live until operator intervention (BK-006).
+        # InsufficientFundsError / payment path UX).
         try:
             await workflow.execute_activity(
                 "dispatch_shipment",
@@ -123,14 +123,23 @@ class OrderWorkflow:
             )
         except Exception:
             # Reverse-order compensation: refund payment first, then release inventory.
+            # refund_payment is isolated so a permanent refund failure does not
+            # short-circuit compensate_reserve_inventory (BK-006).
+            # Known gap (BK-007): if compensate_reserve_inventory exhausts its
+            # retry budget the captured refund_error is dropped and only the
+            # inventory-compensation failure surfaces.
             refund_envelope = refund_payment_envelope(payment_envelope, payment_ref)
-            await workflow.execute_activity(
-                "refund_payment",
-                refund_envelope,
-                start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=_COMPENSATE_RETRY,
-                task_queue=TASK_QUEUE_C,
-            )
+            refund_error: Exception | None = None
+            try:
+                await workflow.execute_activity(
+                    "refund_payment",
+                    refund_envelope,
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=_COMPENSATE_RETRY,
+                    task_queue=TASK_QUEUE_C,
+                )
+            except Exception as exc:
+                refund_error = exc
             compensate_envelope = compensate_reserve_inventory_envelope(
                 inventory_envelope, inventory_ref
             )
@@ -141,6 +150,11 @@ class OrderWorkflow:
                 retry_policy=_COMPENSATE_RETRY,
                 task_queue=TASK_QUEUE_B,
             )
+            if refund_error is not None:
+                # Both failures are in Temporal's event history; suppress Python's
+                # implicit context chain to avoid a misleading "caused by" link between
+                # two independent saga failures.
+                raise refund_error from None
             raise
 
         return envelope.business_tx_id

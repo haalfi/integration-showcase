@@ -513,3 +513,125 @@ async def test_payment_retry_budget_exhaustion_triggers_compensation() -> None:
         f" got {len(charge_attempts)}"
     )
     assert compensate_calls, "compensate_reserve_inventory must run even after budget exhaustion"
+
+
+@pytest.mark.integration
+async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> None:
+    """BK-006: if refund_payment fails permanently, compensate_reserve_inventory must still run.
+
+    Before the fix the two compensation steps were sequential with no isolation;
+    a terminal refund failure propagated before compensate_reserve_inventory was
+    dispatched, leaving the inventory reservation live.
+
+    After the fix refund_payment is wrapped in its own try/except so
+    compensate_reserve_inventory is always dispatched regardless of refund outcome.
+    """
+    call_order: list[str] = []
+    # Lock guards appends from activity worker threads. Temporal retries sync
+    # activities sequentially today, but the lock makes the assumption explicit
+    # rather than invisible — consistent with the other tracking tests in this file.
+    _order_lock = threading.Lock()
+
+    @activity.defn(name="dispatch_shipment")
+    def _stub_dispatch_fail(_env: Envelope) -> BlobRef:
+        raise ShipmentError("carrier unavailable")
+
+    @activity.defn(name="refund_payment")
+    def _stub_refund_permanent_fail(_env: Envelope) -> BlobRef:
+        with _order_lock:
+            call_order.append("refund")
+        raise PaymentGatewayError("refund gateway down")
+
+    @activity.defn(name="compensate_reserve_inventory")
+    def _stub_compensate_tracking(_env: Envelope) -> BlobRef:
+        with _order_lock:
+            call_order.append("compensate")
+        return _STUB_REF
+
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter,
+    ) as env:
+        client = env.client
+        with ThreadPoolExecutor() as executor:
+            async with (
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE,
+                    workflows=[OrderWorkflow],
+                    activities=[
+                        _poison_reserve,
+                        _poison_charge,
+                        _poison_dispatch,
+                        _poison_compensate,
+                        _poison_refund,
+                    ],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_B,
+                    activities=[_stub_reserve, _stub_compensate_tracking],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_C,
+                    activities=[_stub_charge, _stub_refund_permanent_fail],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_D,
+                    activities=[_stub_dispatch_fail],
+                    activity_executor=executor,
+                ),
+            ):
+                with pytest.raises(WorkflowFailureError) as exc_info:
+                    await client.execute_workflow(
+                        OrderWorkflow.run,
+                        _start_envelope(tx="routing-test-006"),
+                        id="test-routing-refund-fail-001",
+                        task_queue=TASK_QUEUE,
+                    )
+
+    # refund_payment retries its way through _COMPENSATE_RETRY.maximum_attempts before
+    # surrendering, so call_order contains one "refund" per attempt followed by
+    # "compensate". Assert (a) both activities ran (guards against compensate being
+    # skipped when refund fails — the BK-006 regression class), (b) the final
+    # ordering is refund-exhaustion then compensate (guards against a reordering
+    # regression: compensate first, then refund).
+    assert "refund" in call_order, "refund_payment must be dispatched at least once"
+    assert "compensate" in call_order, (
+        "compensate_reserve_inventory must run even when refund_payment fails permanently"
+    )
+    last_refund_index = len(call_order) - 1 - call_order[::-1].index("refund")
+    first_compensate_index = call_order.index("compensate")
+    assert last_refund_index < first_compensate_index, (
+        f"Expected all refund attempts before compensate (reverse order), got: {call_order}"
+    )
+    # The refund ApplicationError is what surfaces as the workflow failure; the
+    # implicit shipment context is suppressed via `raise refund_error from None`
+    # in workflow/order.py. Positive walk locks in that PaymentGatewayError is
+    # the surfaced cause; negative walk locks in that ShipmentError is NOT —
+    # together they pin the `from None` semantics against accidental regressions
+    # (e.g. dropping `from None` or flipping to `raise shipment_exc from refund_error`).
+    refund_failure: BaseException | None = exc_info.value
+    while refund_failure is not None:
+        if (
+            isinstance(refund_failure, ApplicationError)
+            and refund_failure.type == "PaymentGatewayError"
+        ):
+            break
+        refund_failure = getattr(refund_failure, "cause", None)
+    assert refund_failure is not None, (
+        "PaymentGatewayError (refund failure) not found in cause chain"
+    )
+    shipment_leak: BaseException | None = exc_info.value
+    while shipment_leak is not None:
+        assert not (
+            isinstance(shipment_leak, ApplicationError) and shipment_leak.type == "ShipmentError"
+        ), (
+            "ShipmentError leaked into the workflow failure cause chain; "
+            "`raise refund_error from None` in workflow/order.py must suppress it."
+        )
+        shipment_leak = getattr(shipment_leak, "cause", None)

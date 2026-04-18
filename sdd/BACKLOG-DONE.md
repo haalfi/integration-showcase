@@ -1,5 +1,14 @@
 # Completed Backlog Items
 
+- [x] **BK-006 -- Two-step compensation short-circuit on catastrophic refund failure**
+  Wrapped `refund_payment` `execute_activity` in its own `try/except` in `workflow/order.py`
+  step 3 so `compensate_reserve_inventory` is always dispatched regardless of refund outcome.
+  When refund fails permanently, the `ActivityError` (a `FailureError`) is re-raised after
+  compensation completes — consistent with Temporal's exception model (only `FailureError`
+  subclasses fail the workflow; `ExceptionGroup` would retry the task instead).
+  Integration test `test_refund_failure_does_not_skip_compensate_reserve_inventory` proves
+  `compensate_reserve_inventory` runs even when `refund_payment` raises `non_retryable=True`.
+
 - [x] **BK-004 -- Business attrs on `store.*` spans**
   Added `BaggageBusinessAttrSpanProcessor` to `shared/otel.py`: at `on_start` it reads
   the six business-attr keys (`business_tx_id`, `workflow_id`, `run_id`, `step_id`,
