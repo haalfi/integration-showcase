@@ -37,11 +37,11 @@ Faktisch, strukturiert, vollständig. Keine Prosa, keine Tutorials.
 Sprachunabhängig. Pseudocode und JSON-Wire-Format, bewusst wenig Code.
 Jede Seite löst **eine** Aufgabe.
 
-- `guides/temporal/`: Workflow starten, Activity implementieren,
+- [`guides/temporal/`](guides/temporal/): Workflow starten, Activity implementieren,
   Kompensation verdrahten, Retry Policy wählen, Task Queue pro Service.
-- `guides/blob/`: Payload schreiben, lesen und verifizieren,
+- [`guides/blob/`](guides/blob/): Payload schreiben, lesen und verifizieren,
   Blob-Metadaten stempeln.
-- `guides/otel/`: Trace Context im Envelope, Baggage zu Span-Attributen,
+- [`guides/otel/`](guides/otel/): Trace Context im Envelope, Baggage zu Span-Attributen,
   Workflow-Span-Attribute, Logs mit Traces korrelieren.
 
 ## Guides (Python, SDK-konkret)
