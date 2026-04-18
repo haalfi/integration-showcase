@@ -24,7 +24,13 @@ _POLL_INTERVAL = 0.5
 # on the first workflow execution.
 _WORKER_SETTLE_DELAY = 2.0
 
-_FORCE_VARS = frozenset({"FORCE_PAYMENT_FAILURE", "FORCE_SHIPMENT_FAILURE"})
+_FORCE_VARS = frozenset(
+    {
+        "FORCE_PAYMENT_FAILURE",
+        "FORCE_PAYMENT_TRANSIENT_FAILS",
+        "FORCE_SHIPMENT_FAILURE",
+    }
+)
 
 ScenarioMain = Callable[[], Coroutine[Any, Any, int]]
 
@@ -114,7 +120,11 @@ async def run_demo(
     os.environ.setdefault("STORE_CONTAINER", _AZURITE_CONTAINER)
 
     print("Ensuring Azurite container...", flush=True)
-    _ensure_azurite_container()
+    try:
+        _ensure_azurite_container()
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
     with log_file.open("wb") as log:
         procs = _start_workers(
@@ -127,5 +137,8 @@ async def run_demo(
             await _wait_ready()
             await asyncio.sleep(_WORKER_SETTLE_DELAY)
             return await scenario_main()
+        except TimeoutError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
         finally:
             _stop_workers(procs)
