@@ -82,6 +82,11 @@ omit = [
   # Thin argparse + asyncio.run shells; the assertion logic lives in main()
   # and is covered via tests/unit/test_scenarios_main.py.
   "scenarios/__init__.py",
+  # Demo runners: thin subprocess orchestration shells with no assertion logic.
+  "scenarios/_demo.py",
+  "scenarios/demo_happy.py",
+  "scenarios/demo_unhappy.py",
+  "scenarios/demo_shipment_failure.py",
 ]
 
 [tool.ruff]

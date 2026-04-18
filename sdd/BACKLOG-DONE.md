@@ -1,5 +1,18 @@
 # Completed Backlog Items
 
+- [x] **IS-015 -- Self-contained demo runners**
+  Added `scenarios/_demo.py` with shared infrastructure (`_ensure_azurite_container`,
+  `_build_worker_env`, `_start_workers`, `_stop_workers`, `_wait_ready`, `run_demo`).
+  Three thin dispatchers (`demo_happy.py`, `demo_unhappy.py`, `demo_shipment_failure.py`)
+  each call `run_demo` with scenario-specific env overrides. `STORE_URL` / `STORE_CONTAINER`
+  default to Azurite values; the blob container is created if absent. Readiness probe polls
+  `/openapi.json` and catches `httpx.HTTPError`. On Windows, workers spawn with
+  `CREATE_NEW_PROCESS_GROUP` so `CTRL_BREAK_EVENT` (not `TerminateProcess`) is used on
+  teardown, preserving OTel flush. A 2-second settle delay guards against the Temporal
+  "pollers not yet registered" race. Each demo writes to its own log file under `./tmp/`.
+  `FORCE_*` vars are stripped from all worker envs so happy-path demo is hermetic against
+  shell leakage. README quick start is `docker compose up -d` + one `hatch run demo-*`.
+
 - [x] **BK-006 -- Two-step compensation short-circuit on catastrophic refund failure**
   Wrapped `refund_payment` `execute_activity` in its own `try/except` in `workflow/order.py`
   step 3 so `compensate_reserve_inventory` is always dispatched regardless of refund outcome.
