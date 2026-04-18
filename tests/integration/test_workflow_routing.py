@@ -534,7 +534,7 @@ async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> No
 
     @activity.defn(name="refund_payment")
     def _stub_refund_permanent_fail(_env: Envelope) -> BlobRef:
-        raise ApplicationError("refund gateway down", non_retryable=True)
+        raise PaymentGatewayError("refund gateway down")
 
     @activity.defn(name="compensate_reserve_inventory")
     def _stub_compensate_tracking(_env: Envelope) -> BlobRef:
@@ -579,7 +579,7 @@ async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> No
                     activity_executor=executor,
                 ),
             ):
-                with pytest.raises(WorkflowFailureError):
+                with pytest.raises(WorkflowFailureError) as exc_info:
                     await client.execute_workflow(
                         OrderWorkflow.run,
                         _start_envelope(tx="routing-test-006"),
@@ -589,4 +589,17 @@ async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> No
 
     assert compensate_calls, (
         "compensate_reserve_inventory must run even when refund_payment fails permanently"
+    )
+    # Verify the refund error surfaces as the workflow failure (due to explicit
+    # cause chaining: raise refund_error from shipment_exc), not the shipment error.
+    refund_failure: BaseException | None = exc_info.value
+    while refund_failure is not None:
+        if (
+            isinstance(refund_failure, ApplicationError)
+            and refund_failure.type == "PaymentGatewayError"
+        ):
+            break
+        refund_failure = getattr(refund_failure, "cause", None)
+    assert refund_failure is not None, (
+        "PaymentGatewayError (refund failure) not found in cause chain"
     )

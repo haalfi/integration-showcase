@@ -121,7 +121,7 @@ class OrderWorkflow:
                 retry_policy=_SHIPMENT_RETRY,
                 task_queue=TASK_QUEUE_D,
             )
-        except Exception:
+        except Exception as shipment_exc:
             # Reverse-order compensation: refund payment first, then release inventory.
             # refund_payment is isolated so a permanent refund failure does not
             # short-circuit compensate_reserve_inventory (BK-006).
@@ -148,7 +148,7 @@ class OrderWorkflow:
                 task_queue=TASK_QUEUE_B,
             )
             if refund_error is not None:
-                raise refund_error from None
+                raise refund_error from shipment_exc
             raise
 
         return envelope.business_tx_id
