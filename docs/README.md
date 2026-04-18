@@ -65,16 +65,3 @@ die dort nicht tief genug ausgeführt sind.
 
 - [`explanation/warum-envelope-statt-raw-payload.md`](explanation/warum-envelope-statt-raw-payload.md)
 - [`explanation/warum-business-tx-id-nicht-in-metrik-labels.md`](explanation/warum-business-tx-id-nicht-in-metrik-labels.md)
-
----
-
-**Orientierungshilfe**
-
-| Du willst                         | Kategorie                    |
-| --------------------------------- | ---------------------------- |
-| etwas lernen, Schritt für Schritt | Tutorial _(nicht im Scope)_  |
-| eine konkrete Aufgabe lösen       | Guides                       |
-| ein Feld oder eine Regel nachsehen| Reference                    |
-| Hintergründe verstehen            | Explanation                  |
-
-Unsicher? Es ist vermutlich ein **Guide**.
