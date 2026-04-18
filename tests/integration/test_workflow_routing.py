@@ -513,3 +513,80 @@ async def test_payment_retry_budget_exhaustion_triggers_compensation() -> None:
         f" got {len(charge_attempts)}"
     )
     assert compensate_calls, "compensate_reserve_inventory must run even after budget exhaustion"
+
+
+@pytest.mark.integration
+async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> None:
+    """BK-006: if refund_payment fails permanently, compensate_reserve_inventory must still run.
+
+    Before the fix the two compensation steps were sequential with no isolation;
+    a terminal refund failure propagated before compensate_reserve_inventory was
+    dispatched, leaving the inventory reservation live.
+
+    After the fix refund_payment is wrapped in its own try/except so
+    compensate_reserve_inventory is always dispatched regardless of refund outcome.
+    """
+    compensate_calls: list[bool] = []
+
+    @activity.defn(name="dispatch_shipment")
+    def _stub_dispatch_fail(_env: Envelope) -> BlobRef:
+        raise ShipmentError("carrier unavailable")
+
+    @activity.defn(name="refund_payment")
+    def _stub_refund_permanent_fail(_env: Envelope) -> BlobRef:
+        raise ApplicationError("refund gateway down", non_retryable=True)
+
+    @activity.defn(name="compensate_reserve_inventory")
+    def _stub_compensate_tracking(_env: Envelope) -> BlobRef:
+        compensate_calls.append(True)
+        return _STUB_REF
+
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter,
+    ) as env:
+        client = env.client
+        with ThreadPoolExecutor() as executor:
+            async with (
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE,
+                    workflows=[OrderWorkflow],
+                    activities=[
+                        _poison_reserve,
+                        _poison_charge,
+                        _poison_dispatch,
+                        _poison_compensate,
+                        _poison_refund,
+                    ],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_B,
+                    activities=[_stub_reserve, _stub_compensate_tracking],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_C,
+                    activities=[_stub_charge, _stub_refund_permanent_fail],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_D,
+                    activities=[_stub_dispatch_fail],
+                    activity_executor=executor,
+                ),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await client.execute_workflow(
+                        OrderWorkflow.run,
+                        _start_envelope(tx="routing-test-006"),
+                        id="test-routing-refund-fail-001",
+                        task_queue=TASK_QUEUE,
+                    )
+
+    assert compensate_calls, (
+        "compensate_reserve_inventory must run even when refund_payment fails permanently"
+    )

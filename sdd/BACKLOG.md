@@ -59,15 +59,6 @@ then small-wins, then the substantive code work, then cleanup.
 
 ---
 
-- [ ] **BK-006 -- Two-step compensation short-circuit on catastrophic refund failure**
-  If `refund_payment` exhausts its `_COMPENSATE_RETRY` budget (5 attempts), the workflow
-  raises without reaching `compensate_reserve_inventory`, leaving the inventory reservation
-  live until operator intervention. The risk is documented in `workflow/order.py` step 3.
-  Fix: wrap the `refund_payment` `execute_activity` call in its own try/except and
-  always dispatch `compensate_reserve_inventory` regardless of refund outcome, surfacing
-  both errors. Acceptance: integration test proves `compensate_reserve_inventory` runs even
-  when `refund_payment` fails permanently.
-
 ## Ideas
 
 - **IS-ext-metrics** -- One counter `saga_completed_total{outcome}` and one histogram
