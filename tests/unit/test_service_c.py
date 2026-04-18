@@ -315,8 +315,7 @@ class TestRefundPayment:
 
         # Tombstone must land in payments under the compensation idempotency_key.
         row = db_conn.execute(
-            "SELECT charge_id, status, refunded_at FROM payments"
-            " WHERE idempotency_key = ?",
+            "SELECT charge_id, status, refunded_at FROM payments WHERE idempotency_key = ?",
             (comp_env.idempotency_key,),
         ).fetchone()
         assert row is not None
