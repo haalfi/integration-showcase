@@ -32,38 +32,13 @@ müssen.
 
 ## Kanal-Details
 
-### Envelope
-
-Primärquelle. Jeder Service liest die Werte aus dem eingehenden Envelope
-und reicht sie unverändert weiter (außer `step_id` und `idempotency_key`,
-die bei `advance` neu gesetzt werden).
-
-### Baggage
-
-W3C Baggage transportiert die Werte innerhalb eines Prozesses über
-SDK-Grenzen. Ein Baggage-Span-Processor liest Baggage beim Span-Start
-und setzt nicht-leere Werte als Span-Attribute. So tragen auch
-tief verschachtelte Child-Spans (z. B. `blob.put`, `db.write`) die
-Attribute, ohne sie explizit zu setzen.
-
-### Span-Attribut
-
-Verpflichtend auf jedem Span (siehe Regeln O-2 in
-[`regeln.md`](regeln.md)). Attributnamen wörtlich wie oben, ohne
-Präfix.
-
-### Log-Feld
-
-Strukturierte Logs injizieren `business_tx_id`, `trace_id`, `span_id`
-zusätzlich zu den Standard-OTel-Feldern. Das erlaubt Logsuche nach
-fachlicher ID im Log Backend, unabhängig vom Trace Backend.
-
-### Blob-Metadata
-
-Storage-seitig pro Blob gesetzt: `workflow_id`, `run_id`, `step_id`,
-`schema_version`, `idempotency_key`. Read-back über die Properties-API
-des Backends. Erlaubt Forensik (welcher Workflow-Schritt hat dieses
-Blob geschrieben) ohne Envelope-Zugriff.
+| Kanal         | Rolle / Mechanismus                                                                                                                          | Besonderheit                                                                                                       |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Envelope      | Primärquelle. Werte werden aus dem eingehenden Envelope gelesen und unverändert weitergereicht.                                              | Ausnahmen: `step_id` und `idempotency_key` werden bei `advance` neu gesetzt.                                       |
+| Baggage       | W3C Baggage transportiert Werte innerhalb des Prozesses über SDK-Grenzen.                                                                    | Span-Processor liest Baggage beim Span-Start; so tragen auch Library-Spans (`blob.put`, `db.write`) die Attribute. |
+| Span-Attribut | Verpflichtend auf jedem Span (Regel O-2 in [`regeln.md`](regeln.md)).                                                                        | Attributnamen wörtlich, snake_case, ohne Präfix.                                                                   |
+| Log-Feld      | Strukturierte Logs injizieren `business_tx_id`, `trace_id`, `span_id` zusätzlich zu den Standard-OTel-Feldern.                               | Log-Suche nach fachlicher ID funktioniert unabhängig vom Trace Backend.                                            |
+| Blob-Metadata | Storage-seitig pro Blob gesetzt: `workflow_id`, `run_id`, `step_id`, `schema_version`, `idempotency_key`.                                    | Read-back über die Properties-API des Backends; Forensik ohne Envelope-Zugriff.                                    |
 
 ## Namenskonventionen
 
