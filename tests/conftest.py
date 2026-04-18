@@ -13,6 +13,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
+from integration_showcase.shared.otel import BaggageBusinessAttrSpanProcessor
+
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
@@ -31,6 +33,7 @@ _SESSION_EXPORTER = InMemorySpanExporter()
 @pytest.fixture(scope="session", autouse=True)
 def _session_tracer_provider() -> Generator[InMemorySpanExporter, None, None]:
     provider = TracerProvider()
+    provider.add_span_processor(BaggageBusinessAttrSpanProcessor())
     provider.add_span_processor(SimpleSpanProcessor(_SESSION_EXPORTER))
     trace.set_tracer_provider(provider)
     propagate.set_global_textmap(

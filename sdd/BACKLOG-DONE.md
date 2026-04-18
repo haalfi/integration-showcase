@@ -1,5 +1,15 @@
 # Completed Backlog Items
 
+- [x] **BK-004 -- Business attrs on `store.*` spans**
+  Added `BaggageBusinessAttrSpanProcessor` to `shared/otel.py`: at `on_start` it reads
+  the six business-attr keys (`business_tx_id`, `workflow_id`, `run_id`, `step_id`,
+  `payload_ref_sha256`, `schema_version`) from the span's `parent_context` W3C baggage
+  and sets any non-empty value as a span attribute. `instrument_activity` now calls
+  `_envelope_baggage_context()` before the activity body to publish all six keys into
+  baggage, so `store.write` / `store.read_bytes` / `store.set_metadata` child spans
+  pick them up automatically. Processor wired into `setup_tracing()` and the test
+  `TracerProvider` in `conftest.py`. Unit tests added in `tests/unit/test_otel.py`.
+
 - [x] **BK-003 -- BlobRef.version_id field hygiene**
   Dropped `version_id` from `BlobRef` (`shared/envelope.py`) and from the concept §3
   envelope (JSON example + Pflicht-/optionale-Felder paragraph + §9.4

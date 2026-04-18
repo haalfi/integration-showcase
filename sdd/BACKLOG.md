@@ -57,16 +57,6 @@ then small-wins, then the substantive code work, then cleanup.
   `run_id` stays empty; all subsequent per-step blobs carry the real `run_id` via
   `envelope.blob_metadata()`. Revisit if/when a metadata-driven lookup needs it.
 
-- [ ] **BK-004 -- Business attrs on `store.*` spans**
-  All `otel_observe`-wrapped blob spans (currently `store.write`, `store.read_bytes`,
-  `store.get_file_info` -- and any future ops added at the blob layer) lack the six
-  business attributes, so concept §6's "Alle Spans" rule fails at the blob layer. Two
-  options: (a) an OTel `SpanProcessor` that reads `business_tx_id` from baggage and stamps
-  it at span-end, or (b) a thin wrapper around `Store` that opens a child span with the
-  envelope attrs before delegating. Prefer (a) -- baggage already carries `business_tx_id`
-  and it avoids touching every call site. Acceptance: every blob span in Jaeger carries the
-  six business attrs.
-
 ---
 
 - [ ] **BK-006 -- Two-step compensation short-circuit on catastrophic refund failure**
