@@ -190,8 +190,7 @@ def refund_payment(envelope: Envelope) -> BlobRef:
             # winning INSERT's timestamp must be used so all callers produce
             # identical result bytes (DESIGN.md §Compensation idempotency pattern).
             persisted = conn.execute(
-                "SELECT charge_id, refunded_at FROM payments"
-                " WHERE idempotency_key = ?",
+                "SELECT charge_id, refunded_at FROM payments WHERE idempotency_key = ?",
                 (envelope.idempotency_key,),
             ).fetchone()
             charge_id = persisted["charge_id"]
