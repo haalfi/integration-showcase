@@ -1,5 +1,20 @@
 # Completed Backlog Items
 
+- [x] **BK-003 -- BlobRef.version_id field hygiene**
+  Dropped `version_id` from `BlobRef` (`shared/envelope.py`) and from the concept §3
+  envelope (JSON example + Pflicht-/optionale-Felder paragraph + §9.4
+  Blob-Versionierung parenthetical). Empirical finding: `remote_store.backends.
+  _azure_common.props_to_fileinfo` (v0.23.0) does not extract Azure VersionId from
+  blob properties — neither into a dedicated field nor into `FileInfo.extra` — so
+  even with Azure blob versioning enabled, `Store.get_file_info()` cannot surface
+  it. Populating it via direct Azure SDK would expand the BK-005 anti-pattern
+  (`_set_azure_blob_metadata` bypass) we're trying to retire, and the showcase has
+  no consumer for the field today. `sha256` remains the backend-independent
+  integrity guarantee. Re-introduce alongside `etag` if upstream remote-store
+  grows native version-ID support and a demo story needs immutability semantics.
+  No new tests needed (no test referenced `version_id`); existing suite still
+  passes after the field removal.
+
 - [x] **IS-012 -- Retry-then-fail payment path**
   Added `PaymentGatewayError` (retryable) and `_get_attempt()` seam to
   `service_c/activities.py`. `FORCE_PAYMENT_TRANSIENT_FAILS=N` env var causes

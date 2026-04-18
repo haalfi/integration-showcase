@@ -86,8 +86,7 @@ Nutzdaten selbst:
   "payload_ref": {
     "blob_url": "https://acct.blob.core.windows.net/workflows/tx-789/input.json",
     "sha256": "…",                    // Pflicht — backend-unabhängige Integrität
-    "etag": "0x8da4f1c93b7e9f2a",     // Azure/Azurite: via get_file_info() befüllt; MemoryBackend: ""
-    "version_id": ""                  // reserviert; Azure-Versionierung nicht aktiv (BK-003)
+    "etag": "0x8da4f1c93b7e9f2a"     // Azure/Azurite: via get_file_info() befüllt; MemoryBackend: ""
   },
   "traceparent": "00-<trace-id>-<span-id>-01",
   "baggage": { "correlation.id": "tx-789" },
@@ -117,8 +116,7 @@ Nutzdaten selbst:
   wenn das Backend die `METADATA`-Capability unterstützt. Azure/Azurite:
   stets nicht-leer (z. B. `"0x8da4f1c93b7e9f2a"`). `MemoryBackend`: stets `""`
   – es unterstützt METADATA, aber `FileInfo.etag` ist `None` und wird
-  normalisiert. `version_id` bleibt leer – Azure-Blob-Versionierung ist im
-  Showcase nicht aktiviert (BK-003).
+  normalisiert.
 
 ---
 
@@ -428,8 +426,7 @@ Gesundheit) gehören Workflow-Container hinter:
   und definierter Retention,
 - **Legal Holds** für laufende Rechtsverfahren,
 - **Blob-Versionierung** auf Account-Ebene, sodass Überschreibversuche
-  als neue Version landen und der ursprüngliche Blob unverändert bleibt
-  (liefert dann auch die `version_id` im Envelope),
+  als neue Version landen und der ursprüngliche Blob unverändert bleibt,
 - **Soft Delete** für Container und Blobs als zusätzliche Sicherung
   gegen versehentliches Löschen.
 

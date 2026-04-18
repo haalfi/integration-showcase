@@ -22,16 +22,12 @@ class BlobRef(BaseModel):
     after download. ``etag`` is populated from ``Store.get_file_info()`` after each write
     when the backend supports the ``METADATA`` capability. Azure/Azurite: always non-empty.
     ``MemoryBackend``: always ``""`` — it supports METADATA but ``FileInfo.etag`` is
-    ``None``, which :func:`~shared.blob.upload` normalises to ``""``. ``version_id``
-    is reserved; Azure blob versioning is not enabled in this showcase so it remains
-    ``""``.
-
+    ``None``, which :func:`~shared.blob.upload` normalises to ``""``.
     """
 
     blob_url: str
     sha256: str
     etag: str = ""
-    version_id: str = ""
 
 
 class Envelope(BaseModel):
