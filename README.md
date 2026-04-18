@@ -21,8 +21,9 @@ Services exchange only a canonical **Envelope** (never raw payloads). Azure Blob
 OpenTelemetry spans link the full trace — including retries and compensation — via a
 stable `business_tx_id`.
 
-See [sdd/research/research-temporal-azure-otel-orchestration.md](sdd/research/research-temporal-azure-otel-orchestration.md)
-for full architecture details (German).
+Full documentation covering the envelope contract, rules reference, how-to guides
+for Temporal, Blob Storage, and OpenTelemetry, plus design rationale is provided in
+[docs](docs/) (German).
 
 ## Quick start
 
