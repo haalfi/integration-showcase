@@ -45,9 +45,7 @@ _PAYMENT_RETRY = RetryPolicy(
 )
 
 _SHIPMENT_RETRY = RetryPolicy(
-    maximum_attempts=3,
-    initial_interval=timedelta(seconds=2),
-    backoff_coefficient=2.0,
+    maximum_attempts=1,
     non_retryable_error_types=["ShipmentError"],
 )
 

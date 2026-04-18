@@ -170,23 +170,32 @@ def refund_payment(envelope: Envelope) -> BlobRef:
         ).fetchone()
 
         if row is None:
-            charge_id = "orphan"
-            refunded_at = datetime.now(UTC).isoformat()
+            now = datetime.now(UTC).isoformat()
             conn.execute(
-                "INSERT INTO payments"
+                "INSERT OR IGNORE INTO payments"
                 " (idempotency_key, business_tx_id, charge_id, amount_cents,"
                 "  status, charged_at, refunded_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     envelope.idempotency_key,
                     envelope.business_tx_id,
-                    charge_id,
+                    "orphan",
                     0,
                     "orphan",
-                    refunded_at,
-                    refunded_at,
+                    now,
+                    now,
                 ),
             )
+            # Unconditional re-read: concurrent first-attempt race means the
+            # winning INSERT's timestamp must be used so all callers produce
+            # identical result bytes (DESIGN.md §Compensation idempotency pattern).
+            persisted = conn.execute(
+                "SELECT charge_id, refunded_at FROM payments"
+                " WHERE idempotency_key = ?",
+                (envelope.idempotency_key,),
+            ).fetchone()
+            charge_id = persisted["charge_id"]
+            refunded_at = persisted["refunded_at"]
             kind = "orphan_tombstone"
         else:
             if row["refunded_at"] is None:

@@ -313,13 +313,21 @@ async def test_shipment_failure_triggers_two_step_reverse_compensation() -> None
                     activity_executor=executor,
                 ),
             ):
-                with pytest.raises(WorkflowFailureError):
+                with pytest.raises(WorkflowFailureError) as exc_info:
                     await client.execute_workflow(
                         OrderWorkflow.run,
                         _start_envelope(tx="routing-test-003"),
                         id="test-routing-shipment-fail-001",
                         task_queue=TASK_QUEUE,
                     )
+
     assert call_order == ["refund", "compensate"], (
         f"Expected refund before compensate (reverse order), got: {call_order}"
     )
+    # Verify ShipmentError type is preserved through Temporal's serialization boundary.
+    cause: BaseException | None = exc_info.value
+    while cause is not None:
+        if isinstance(cause, ApplicationError) and cause.type == "ShipmentError":
+            break
+        cause = getattr(cause, "cause", None)
+    assert cause is not None, "ShipmentError not found in WorkflowFailureError cause chain"

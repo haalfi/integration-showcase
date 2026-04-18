@@ -28,7 +28,7 @@ from integration_showcase.shared.otel import instrument_activity
 
 
 class ShipmentError(Exception):
-    """Retryable: shipment dispatch failed (e.g. carrier API unavailable)."""
+    """Non-retryable: shipment dispatch failed (e.g. carrier rejected the order)."""
 
 
 _DB_PATH_ENV = "SERVICE_D_DB_PATH"
