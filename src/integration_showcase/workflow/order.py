@@ -121,7 +121,7 @@ class OrderWorkflow:
                 retry_policy=_SHIPMENT_RETRY,
                 task_queue=TASK_QUEUE_D,
             )
-        except Exception as shipment_exc:
+        except Exception:
             # Reverse-order compensation: refund payment first, then release inventory.
             # refund_payment is isolated so a permanent refund failure does not
             # short-circuit compensate_reserve_inventory (BK-006).
@@ -148,7 +148,10 @@ class OrderWorkflow:
                 task_queue=TASK_QUEUE_B,
             )
             if refund_error is not None:
-                raise refund_error from shipment_exc
+                # Both failures are in Temporal's event history; suppress Python's
+                # implicit context chain to avoid a misleading "caused by" link between
+                # two independent saga failures.
+                raise refund_error from None
             raise
 
         return envelope.business_tx_id
