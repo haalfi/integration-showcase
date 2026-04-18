@@ -7,14 +7,10 @@ Same @pytest.mark.integration guard as test_workflow_routing.py; no explicit ski
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
 
 import pytest
-import temporalio.worker
-import temporalio.workflow
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from temporalio import activity
-from temporalio.contrib.opentelemetry import TracingInterceptor, TracingWorkflowInboundInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -26,48 +22,8 @@ from integration_showcase.shared.constants import (
     TASK_QUEUE_D,
 )
 from integration_showcase.shared.envelope import BlobRef, Envelope
+from integration_showcase.shared.otel import EnvelopeTracingInterceptor
 from integration_showcase.workflow.order import OrderWorkflow
-
-
-class _EnvelopeTracingWorkflowInterceptor(TracingWorkflowInboundInterceptor):
-    """Stamps six envelope business attrs onto the RunWorkflow span (IS-008)."""
-
-    async def execute_workflow(self, input: temporalio.worker.ExecuteWorkflowInput) -> Any:
-        env = input.args[0] if input.args else None
-        self._run_wf_attrs: dict[str, str] = {}
-        if env is not None:
-            run_id = getattr(env, "run_id", None) or temporalio.workflow.info().run_id
-            ref = getattr(env, "payload_ref", None)
-            self._run_wf_attrs = {
-                k: v
-                for k, v in {
-                    "business_tx_id": getattr(env, "business_tx_id", None),
-                    "workflow_id": getattr(env, "workflow_id", None),
-                    "run_id": run_id,
-                    "step_id": "workflow",
-                    "payload_ref_sha256": getattr(ref, "sha256", None) if ref else None,
-                    "schema_version": getattr(env, "schema_version", None),
-                }.items()
-                if v
-            }
-        return await super().execute_workflow(input)
-
-    def _completed_span(self, span_name: str, *, additional_attributes=None, **kwargs) -> None:  # type: ignore[override]
-        attrs = getattr(self, "_run_wf_attrs", {})
-        if span_name.startswith("RunWorkflow:") and attrs:
-            additional_attributes = {**(additional_attributes or {}), **attrs}
-        return super()._completed_span(
-            span_name, additional_attributes=additional_attributes, **kwargs
-        )
-
-
-class _EnvelopeTracingInterceptor(TracingInterceptor):
-    def workflow_interceptor_class(
-        self, input: temporalio.worker.WorkflowInterceptorClassInput
-    ) -> type[TracingWorkflowInboundInterceptor]:
-        super().workflow_interceptor_class(input)  # registers extern function
-        return _EnvelopeTracingWorkflowInterceptor
-
 
 _STUB_REF = BlobRef(blob_url="stub/ref.json", sha256="a" * 64)
 
@@ -122,7 +78,7 @@ async def test_workflow_span_has_six_business_attrs(spans: InMemorySpanExporter)
                     env.client,
                     task_queue=TASK_QUEUE,
                     workflows=[OrderWorkflow],
-                    interceptors=[_EnvelopeTracingInterceptor(always_create_workflow_spans=True)],
+                    interceptors=[EnvelopeTracingInterceptor(always_create_workflow_spans=True)],
                 ),
                 Worker(
                     env.client,

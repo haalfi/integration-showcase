@@ -8,9 +8,10 @@ from urllib.parse import quote
 
 import httpx
 from temporalio.client import Client
-from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
+
+from integration_showcase.shared.otel import EnvelopeTracingInterceptor
 
 _DEFAULT_ITEMS = ["widget-42", "gadget-7"]
 _DEFAULT_CUSTOMER_ID = "cust-001"
@@ -101,7 +102,7 @@ async def await_workflow(
     client = await Client.connect(
         address,
         data_converter=pydantic_data_converter,
-        interceptors=[TracingInterceptor()],
+        interceptors=[EnvelopeTracingInterceptor()],
     )
     handle = client.get_workflow_handle(workflow_id)
 

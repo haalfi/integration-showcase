@@ -5,8 +5,8 @@ Payment failure triggers compensation of reserve-inventory (single step).
 Shipment failure triggers reverse-order two-step compensation:
   refund-payment first, then release-reservation.
   Both compensation steps are isolated so one failure does not suppress the other.
-  On any compensation failure, OTel span events record the full error context
-  (shipment trigger, refund outcome, inventory-release outcome).
+  On any compensation failure, zero-duration OTel compensation spans record the full
+  error context (shipment trigger, refund outcome, inventory-release outcome).
 """
 
 from __future__ import annotations
@@ -17,14 +17,13 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from opentelemetry import trace
-
     from integration_showcase.shared.constants import (
         TASK_QUEUE_B,
         TASK_QUEUE_C,
         TASK_QUEUE_D,
     )
     from integration_showcase.shared.envelope import BlobRef, Envelope
+    from integration_showcase.shared.otel import emit_workflow_compensation_span
     from integration_showcase.workflow.envelopes import (
         compensate_reserve_inventory_envelope,
         refund_payment_envelope,
@@ -115,11 +114,10 @@ class OrderWorkflow:
         except Exception as shipment_exc:
             # Reverse-order compensation: refund payment first, then release inventory.
             # Both steps are isolated so one failure never suppresses the other (BK-006/007).
-            span = trace.get_current_span()
             _sc = getattr(shipment_exc, "cause", shipment_exc)
-            span.add_event(
-                "compensation.triggered",
-                {"error.type": getattr(_sc, "type", type(_sc).__name__)},
+            emit_workflow_compensation_span(
+                "Compensation:Triggered",
+                {"error.type": getattr(_sc, "type", None) or type(_sc).__name__},
             )
 
             refund_envelope = refund_payment_envelope(payment_envelope, payment_ref)
@@ -152,15 +150,15 @@ class OrderWorkflow:
 
             if refund_error is not None:
                 _rc = getattr(refund_error, "cause", refund_error)
-                span.add_event(
-                    "compensation.refund_failed",
-                    {"error.type": getattr(_rc, "type", type(_rc).__name__)},
+                emit_workflow_compensation_span(
+                    "Compensation:RefundFailed",
+                    {"error.type": getattr(_rc, "type", None) or type(_rc).__name__},
                 )
             if compensate_error is not None:
                 _cc = getattr(compensate_error, "cause", compensate_error)
-                span.add_event(
-                    "compensation.inventory_release_failed",
-                    {"error.type": getattr(_cc, "type", type(_cc).__name__)},
+                emit_workflow_compensation_span(
+                    "Compensation:InventoryReleaseFailed",
+                    {"error.type": getattr(_cc, "type", None) or type(_cc).__name__},
                 )
 
             if compensate_error is not None:

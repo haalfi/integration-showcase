@@ -16,13 +16,12 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 from temporalio.client import Client
-from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
 from integration_showcase.service_d.activities import dispatch_shipment
 from integration_showcase.shared.constants import TASK_QUEUE_D
-from integration_showcase.shared.otel import setup_tracing
+from integration_showcase.shared.otel import EnvelopeTracingInterceptor, setup_tracing
 
 _ACTIVITY_EXECUTOR_MAX_WORKERS = 10
 
@@ -33,7 +32,7 @@ async def main() -> None:
     client = await Client.connect(
         address,
         data_converter=pydantic_data_converter,
-        interceptors=[TracingInterceptor()],
+        interceptors=[EnvelopeTracingInterceptor()],
     )
     with ThreadPoolExecutor(max_workers=_ACTIVITY_EXECUTOR_MAX_WORKERS) as executor:
         worker = Worker(

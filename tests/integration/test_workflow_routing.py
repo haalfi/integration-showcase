@@ -20,6 +20,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from temporalio import activity
 from temporalio.client import WorkflowFailureError
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -36,6 +37,7 @@ from integration_showcase.shared.constants import (
     TASK_QUEUE_D,
 )
 from integration_showcase.shared.envelope import BlobRef, Envelope
+from integration_showcase.shared.otel import EnvelopeTracingInterceptor
 from integration_showcase.workflow.order import (
     _PAYMENT_RETRY,
     OrderWorkflow,
@@ -638,7 +640,9 @@ async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> No
 
 
 @pytest.mark.integration
-async def test_dual_compensation_failure_surfaces_both_failures() -> None:
+async def test_dual_compensation_failure_surfaces_both_failures(
+    spans: InMemorySpanExporter,
+) -> None:
     """BK-007 Gap B: when dispatch, refund, and compensate_reserve_inventory all fail
     permanently, compensate_reserve_inventory failure must be the terminal exception and
     both compensation activities must have been attempted before the workflow fails.
@@ -648,7 +652,7 @@ async def test_dual_compensation_failure_surfaces_both_failures() -> None:
     surfaced. The shipment trigger was also invisible.
 
     Full error context (shipment trigger, refund failure, inventory-release failure) is
-    recorded in OTel span events in workflow/order.py for production-trace visibility.
+    recorded via zero-duration OTel compensation spans emitted from the workflow body.
     """
     call_order: list[str] = []
     _lock = threading.Lock()
@@ -688,6 +692,7 @@ async def test_dual_compensation_failure_surfaces_both_failures() -> None:
                         _poison_compensate,
                         _poison_refund,
                     ],
+                    interceptors=[EnvelopeTracingInterceptor(always_create_workflow_spans=True)],
                     activity_executor=executor,
                 ),
                 Worker(
@@ -726,9 +731,7 @@ async def test_dual_compensation_failure_surfaces_both_failures() -> None:
         f"Expected all refund attempts before compensate (reverse order), got: {call_order}"
     )
 
-    # compensate_reserve_inventory failure is the terminal workflow exception; the
-    # refund PaymentGatewayError is visible via the call_order tracking (proves it
-    # was attempted and failed) and in OTel span events at runtime.
+    # compensate_reserve_inventory failure is the terminal workflow exception.
     compensate_cause: BaseException | None = exc_info.value
     while compensate_cause is not None:
         if (
@@ -739,4 +742,24 @@ async def test_dual_compensation_failure_surfaces_both_failures() -> None:
         compensate_cause = getattr(compensate_cause, "cause", None)
     assert compensate_cause is not None, (
         "InventoryServiceError (compensate failure) not found in WorkflowFailureError cause chain"
+    )
+
+    # OTel compensation spans carry the full error context for all three failures.
+    # emit_workflow_compensation_span() in order.py emits zero-duration spans via the
+    # interceptor's _completed_span -- the only correct emission path from workflow code.
+    finished = {s.name: s for s in spans.get_finished_spans()}
+    triggered = finished.get("Compensation:Triggered")
+    assert triggered is not None, "Compensation:Triggered span must be exported"
+    assert (triggered.attributes or {}).get("error.type") == "ShipmentError", (
+        f"expected ShipmentError, got {(triggered.attributes or {}).get('error.type')}"
+    )
+    refund_failed = finished.get("Compensation:RefundFailed")
+    assert refund_failed is not None, "Compensation:RefundFailed span must be exported"
+    assert (refund_failed.attributes or {}).get("error.type") == "PaymentGatewayError", (
+        f"expected PaymentGatewayError, got {(refund_failed.attributes or {}).get('error.type')}"
+    )
+    inv_failed = finished.get("Compensation:InventoryReleaseFailed")
+    assert inv_failed is not None, "Compensation:InventoryReleaseFailed span must be exported"
+    assert (inv_failed.attributes or {}).get("error.type") == "InventoryServiceError", (
+        f"expected InventoryServiceError, got {(inv_failed.attributes or {}).get('error.type')}"
     )

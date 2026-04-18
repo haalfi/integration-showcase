@@ -15,12 +15,11 @@ import asyncio
 import os
 
 from temporalio.client import Client
-from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
 from integration_showcase.shared.constants import TASK_QUEUE
-from integration_showcase.shared.otel import setup_tracing
+from integration_showcase.shared.otel import EnvelopeTracingInterceptor, setup_tracing
 from integration_showcase.workflow.order import OrderWorkflow
 
 
@@ -30,7 +29,7 @@ async def main() -> None:
     client = await Client.connect(
         address,
         data_converter=pydantic_data_converter,
-        interceptors=[TracingInterceptor()],
+        interceptors=[EnvelopeTracingInterceptor()],
     )
     worker = Worker(
         client,
