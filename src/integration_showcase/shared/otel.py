@@ -13,11 +13,12 @@ import os
 from typing import TYPE_CHECKING, TypeVar
 
 from opentelemetry import baggage, propagate, trace
+from opentelemetry import context as context_api
 from opentelemetry.baggage.propagation import W3CBaggagePropagator
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.propagators.composite import CompositePropagator
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from temporalio import activity
@@ -29,9 +30,48 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from opentelemetry.context import Context
+    from opentelemetry.sdk.trace import ReadableSpan
     from opentelemetry.trace import Span
 
 _R = TypeVar("_R")
+
+# Baggage keys that carry the six required business attributes (DESIGN.md §OTel
+# span attributes).  ``instrument_activity`` writes all six into baggage before
+# the activity body runs so that child spans (``store.*`` blob ops) can pick
+# them up via ``BaggageBusinessAttrSpanProcessor``.
+_BUSINESS_ATTR_BAGGAGE_KEYS: tuple[str, ...] = (
+    "business_tx_id",
+    "workflow_id",
+    "run_id",
+    "step_id",
+    "payload_ref_sha256",
+    "schema_version",
+)
+
+
+class BaggageBusinessAttrSpanProcessor(SpanProcessor):
+    """Stamp the six required business attributes from W3C baggage onto every span.
+
+    Reads each of the six business-attr baggage keys from *parent_context* at
+    ``on_start`` time and sets any non-empty value as a span attribute.  Because
+    ``on_start`` fires synchronously in the span-creating thread -- before the
+    span is handed to ``BatchSpanProcessor``'s background thread -- the baggage
+    entries published by :func:`instrument_activity` are visible here when
+    ``store.*`` child spans are opened inside an activity invocation.
+
+    Wired in via :func:`setup_tracing`; also added to the test
+    :class:`TracerProvider` in ``tests/conftest.py``.
+    """
+
+    def on_start(self, span: Span, parent_context: Context | None = None) -> None:
+        ctx = parent_context if parent_context is not None else context_api.get_current()
+        for key in _BUSINESS_ATTR_BAGGAGE_KEYS:
+            value = baggage.get_baggage(key, context=ctx)
+            if value:
+                span.set_attribute(key, str(value))
+
+    def on_end(self, span: ReadableSpan) -> None:  # noqa: ARG002
+        pass
 
 
 def setup_tracing(service_name: str) -> TracerProvider:
@@ -51,6 +91,7 @@ def setup_tracing(service_name: str) -> TracerProvider:
     effective_name = os.environ.get("OTEL_SERVICE_NAME") or service_name
     resource = Resource.create({"service.name": effective_name})
     provider = TracerProvider(resource=resource)
+    provider.add_span_processor(BaggageBusinessAttrSpanProcessor())
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(provider)
     propagate.set_global_textmap(
@@ -137,6 +178,27 @@ def _backfill_run_id(envelope: Envelope) -> Envelope:
     return envelope
 
 
+def _envelope_baggage_context(envelope: Envelope) -> Context:
+    """Return a context with all six business attrs written into W3C baggage.
+
+    Called by :func:`instrument_activity` before the activity body so that
+    any child spans (``store.*`` blob ops) created inside the activity see all
+    six attrs via :class:`BaggageBusinessAttrSpanProcessor`.
+    """
+    ctx = context_api.get_current()
+    for key, value in (
+        ("business_tx_id", envelope.business_tx_id),
+        ("workflow_id", envelope.workflow_id),
+        ("run_id", envelope.run_id),
+        ("step_id", envelope.step_id),
+        ("payload_ref_sha256", envelope.payload_ref.sha256),
+        ("schema_version", envelope.schema_version),
+    ):
+        if value:
+            ctx = baggage.set_baggage(key, value, context=ctx)
+    return ctx
+
+
 def instrument_activity(
     fn: Callable[..., _R],
 ) -> Callable[..., _R]:
@@ -164,9 +226,13 @@ def instrument_activity(
         async def async_wrapper(envelope: Envelope, *args: object, **kwargs: object) -> _R:
             envelope = _backfill_run_id(envelope)
             set_envelope_span_attrs(trace.get_current_span(), envelope)
-            # fn is iscoroutinefunction here, so fn(...) returns an Awaitable.
-            # mypy cannot narrow Callable[..., _R] through iscoroutinefunction.
-            return await fn(envelope, *args, **kwargs)  # type: ignore[no-any-return]
+            token = context_api.attach(_envelope_baggage_context(envelope))
+            try:
+                # fn is iscoroutinefunction here, so fn(...) returns an Awaitable.
+                # mypy cannot narrow Callable[..., _R] through iscoroutinefunction.
+                return await fn(envelope, *args, **kwargs)  # type: ignore[no-any-return]
+            finally:
+                context_api.detach(token)
 
         return async_wrapper  # type: ignore[return-value]
 
@@ -174,6 +240,10 @@ def instrument_activity(
     def wrapper(envelope: Envelope, *args: object, **kwargs: object) -> _R:
         envelope = _backfill_run_id(envelope)
         set_envelope_span_attrs(trace.get_current_span(), envelope)
-        return fn(envelope, *args, **kwargs)
+        token = context_api.attach(_envelope_baggage_context(envelope))
+        try:
+            return fn(envelope, *args, **kwargs)
+        finally:
+            context_api.detach(token)
 
     return wrapper

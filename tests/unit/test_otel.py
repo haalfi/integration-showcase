@@ -32,6 +32,60 @@ def _envelope(**overrides: object) -> Envelope:
     return Envelope(**{**defaults, **overrides})
 
 
+class TestBaggageBusinessAttrSpanProcessor:
+    def test_stamps_six_attrs_from_baggage(self, spans: InMemorySpanExporter) -> None:
+        """Child span created inside baggage context carries all six business attrs."""
+        token = attach(baggage.set_baggage("business_tx_id", "tx-bk004"))
+        token2 = attach(baggage.set_baggage("workflow_id", "order-bk004"))
+        token3 = attach(baggage.set_baggage("run_id", "run-bk004"))
+        token4 = attach(baggage.set_baggage("step_id", "reserve"))
+        token5 = attach(baggage.set_baggage("payload_ref_sha256", "abcd1234"))
+        token6 = attach(baggage.set_baggage("schema_version", "1.0"))
+        try:
+            with _tracer.start_as_current_span("store.write"):
+                pass
+        finally:
+            detach(token6)
+            detach(token5)
+            detach(token4)
+            detach(token3)
+            detach(token2)
+            detach(token)
+
+        (recorded,) = spans.get_finished_spans()
+        attrs = recorded.attributes or {}
+        assert attrs["business_tx_id"] == "tx-bk004"
+        assert attrs["workflow_id"] == "order-bk004"
+        assert attrs["run_id"] == "run-bk004"
+        assert attrs["step_id"] == "reserve"
+        assert attrs["payload_ref_sha256"] == "abcd1234"
+        assert attrs["schema_version"] == "1.0"
+
+    def test_no_attrs_without_baggage(self, spans: InMemorySpanExporter) -> None:
+        """Span created with no baggage gets no business attrs from the processor."""
+        with _tracer.start_as_current_span("store.write"):
+            pass
+
+        (recorded,) = spans.get_finished_spans()
+        attrs = recorded.attributes or {}
+        assert "business_tx_id" not in attrs
+        assert "workflow_id" not in attrs
+
+    def test_partial_baggage_stamps_only_present_keys(self, spans: InMemorySpanExporter) -> None:
+        """Only keys present in baggage are stamped; missing keys are left unset."""
+        token = attach(baggage.set_baggage("business_tx_id", "tx-partial"))
+        try:
+            with _tracer.start_as_current_span("store.write"):
+                pass
+        finally:
+            detach(token)
+
+        (recorded,) = spans.get_finished_spans()
+        attrs = recorded.attributes or {}
+        assert attrs["business_tx_id"] == "tx-partial"
+        assert "workflow_id" not in attrs
+
+
 class TestSetEnvelopeSpanAttrs:
     def test_all_six_attributes_present(self, spans: InMemorySpanExporter) -> None:
         env = _envelope()
@@ -111,6 +165,30 @@ class TestInstrumentActivityAsync:
         assert attrs["business_tx_id"] == "tx-001"
         assert attrs["step_id"] == "start"
 
+    async def test_child_spans_inside_async_activity_get_six_attrs(
+        self, spans: InMemorySpanExporter
+    ) -> None:
+        """Child spans (e.g. store.write) created within the activity body carry all six attrs."""
+
+        @instrument_activity
+        async def _probe(envelope: Envelope) -> Envelope:
+            with _tracer.start_as_current_span("store.write"):
+                pass
+            return envelope
+
+        env = _envelope()
+        with _tracer.start_as_current_span("RunActivity:probe"):
+            await _probe(env)
+
+        recorded = {s.name: s for s in spans.get_finished_spans()}
+        child_attrs = recorded["store.write"].attributes or {}
+        assert child_attrs["business_tx_id"] == "tx-001"
+        assert child_attrs["workflow_id"] == "order-123"
+        assert child_attrs["run_id"] == "run-456"
+        assert child_attrs["step_id"] == "start"
+        assert child_attrs["payload_ref_sha256"] == "deadbeef"
+        assert child_attrs["schema_version"] == "1.0"
+
 
 class TestInstrumentActivityDecorator:
     def test_tags_current_span_when_called_in_activity_env(
@@ -137,6 +215,34 @@ class TestInstrumentActivityDecorator:
         assert attrs["business_tx_id"] == "tx-001"
         assert attrs["step_id"] == "start"
         assert calls == [env]
+
+    def test_child_spans_inside_sync_activity_get_six_attrs(
+        self, spans: InMemorySpanExporter
+    ) -> None:
+        """Child spans created within a sync activity body carry all six attrs."""
+
+        @instrument_activity
+        def _probe(envelope: Envelope) -> Envelope:
+            with _tracer.start_as_current_span("store.write"):
+                pass
+            return envelope
+
+        env = _envelope()
+
+        def _run() -> None:
+            with _tracer.start_as_current_span("RunActivity:probe"):
+                _probe(env)
+
+        ActivityEnvironment().run(_run)
+
+        recorded = {s.name: s for s in spans.get_finished_spans()}
+        child_attrs = recorded["store.write"].attributes or {}
+        assert child_attrs["business_tx_id"] == "tx-001"
+        assert child_attrs["workflow_id"] == "order-123"
+        assert child_attrs["run_id"] == "run-456"
+        assert child_attrs["step_id"] == "start"
+        assert child_attrs["payload_ref_sha256"] == "deadbeef"
+        assert child_attrs["schema_version"] == "1.0"
 
     def test_backfills_run_id_from_activity_info(self, spans: InMemorySpanExporter) -> None:
         captured: dict[str, Envelope] = {}
