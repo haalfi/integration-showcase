@@ -526,7 +526,7 @@ async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> No
     After the fix refund_payment is wrapped in its own try/except so
     compensate_reserve_inventory is always dispatched regardless of refund outcome.
     """
-    compensate_calls: list[bool] = []
+    call_order: list[str] = []
 
     @activity.defn(name="dispatch_shipment")
     def _stub_dispatch_fail(_env: Envelope) -> BlobRef:
@@ -534,11 +534,12 @@ async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> No
 
     @activity.defn(name="refund_payment")
     def _stub_refund_permanent_fail(_env: Envelope) -> BlobRef:
+        call_order.append("refund")
         raise PaymentGatewayError("refund gateway down")
 
     @activity.defn(name="compensate_reserve_inventory")
     def _stub_compensate_tracking(_env: Envelope) -> BlobRef:
-        compensate_calls.append(True)
+        call_order.append("compensate")
         return _STUB_REF
 
     async with await WorkflowEnvironment.start_time_skipping(
@@ -587,11 +588,27 @@ async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> No
                         task_queue=TASK_QUEUE,
                     )
 
-    assert compensate_calls, (
+    # refund_payment retries its way through _COMPENSATE_RETRY.maximum_attempts before
+    # surrendering, so call_order contains one "refund" per attempt followed by
+    # "compensate". Assert (a) both activities ran (guards against compensate being
+    # skipped when refund fails — the BK-006 regression class), (b) the final
+    # ordering is refund-exhaustion then compensate (guards against a reordering
+    # regression: compensate first, then refund).
+    assert "refund" in call_order, "refund_payment must be dispatched at least once"
+    assert "compensate" in call_order, (
         "compensate_reserve_inventory must run even when refund_payment fails permanently"
     )
-    # Verify the refund error surfaces as the workflow failure (due to explicit
-    # cause chaining: raise refund_error from shipment_exc), not the shipment error.
+    last_refund_index = len(call_order) - 1 - call_order[::-1].index("refund")
+    first_compensate_index = call_order.index("compensate")
+    assert last_refund_index < first_compensate_index, (
+        f"Expected all refund attempts before compensate (reverse order), got: {call_order}"
+    )
+    # The refund ApplicationError is what surfaces as the workflow failure; the
+    # implicit shipment context is suppressed via `raise refund_error from None`
+    # in workflow/order.py. Positive walk locks in that PaymentGatewayError is
+    # the surfaced cause; negative walk locks in that ShipmentError is NOT —
+    # together they pin the `from None` semantics against accidental regressions
+    # (e.g. dropping `from None` or flipping to `raise shipment_exc from refund_error`).
     refund_failure: BaseException | None = exc_info.value
     while refund_failure is not None:
         if (
@@ -603,3 +620,12 @@ async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> No
     assert refund_failure is not None, (
         "PaymentGatewayError (refund failure) not found in cause chain"
     )
+    shipment_leak: BaseException | None = exc_info.value
+    while shipment_leak is not None:
+        assert not (
+            isinstance(shipment_leak, ApplicationError) and shipment_leak.type == "ShipmentError"
+        ), (
+            "ShipmentError leaked into the workflow failure cause chain; "
+            "`raise refund_error from None` in workflow/order.py must suppress it."
+        )
+        shipment_leak = getattr(shipment_leak, "cause", None)

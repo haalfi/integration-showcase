@@ -35,6 +35,25 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 Ordered by recommended execution: concept-first (sets the acceptance bar),
 then small-wins, then the substantive code work, then cleanup.
 
+- [ ] **BK-007 -- Preserve refund failure when inventory compensation also fails**
+  Follow-up to BK-006. In `workflow/order.py` the shipment-failure compensation block
+  catches `refund_payment` failures into `refund_error` but leaves
+  `compensate_reserve_inventory` uncaught. If the inventory compensation also
+  exhausts its `_COMPENSATE_RETRY` budget, control exits the outer `except Exception:`
+  before the `if refund_error is not None: raise refund_error from None` line, so the
+  refund failure is silently dropped from the workflow outcome and only the
+  inventory-compensation failure surfaces. The original shipment trigger is also
+  only preserved as Python's implicit `__context__` rather than as an explicit cause
+  (the outer except uses bare `except Exception:` with no `as` binding).
+  Acceptance: when both compensation steps fail, the workflow failure cause chain
+  must expose the refund failure (and ideally the shipment trigger) — not just the
+  inventory-compensation failure. Likely wants an ExceptionGroup-shaped outcome or
+  an explicit multi-error wrapping; cross-check the Temporal failure-model
+  constraints from BK-006 (only `FailureError` subclasses fail the workflow).
+  Integration test should stub all three of dispatch, refund, and compensate to
+  fail permanently and assert both the refund `PaymentGatewayError` and the
+  inventory-compensation failure are visible in the cause chain.
+
 - [ ] **BK-005 -- Remove direct Azure SDK bypass in `shared/blob.py`**
   IS-014 added `_set_azure_blob_metadata()` which opens its own `BlobServiceClient` to call
   `set_blob_metadata()`. This violates `DESIGN.md § remote-store usage` (Blob I/O goes

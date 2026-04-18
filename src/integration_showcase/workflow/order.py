@@ -125,6 +125,9 @@ class OrderWorkflow:
             # Reverse-order compensation: refund payment first, then release inventory.
             # refund_payment is isolated so a permanent refund failure does not
             # short-circuit compensate_reserve_inventory (BK-006).
+            # Known gap (BK-007): if compensate_reserve_inventory exhausts its
+            # retry budget the captured refund_error is dropped and only the
+            # inventory-compensation failure surfaces.
             refund_envelope = refund_payment_envelope(payment_envelope, payment_ref)
             refund_error: BaseException | None = None
             try:
