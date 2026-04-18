@@ -258,8 +258,7 @@ class TestRefundPayment:
     def test_refunds_existing_payment(
         self, memory_store: Store, db_conn: sqlite3.Connection
     ) -> None:
-        """Normal path: payment exists -> refund recorded with kind='refunded'."""
-        # First, write a real payment row via charge_payment.
+        """Normal path: payment exists -> payments row gets refunded_at, kind='refunded'."""
         inv_env = _make_inventory_envelope(["w"], tx="tx-refund-ok")
         payment_ref = charge_payment(inv_env)
         payment_env = inv_env.advance("charge-payment", payment_ref)
@@ -267,12 +266,13 @@ class TestRefundPayment:
         comp_env = _refund_envelope(payment_env, payment_ref)
         ref = refund_payment(comp_env)
 
+        # The forward payments row must now carry a refunded_at timestamp.
         row = db_conn.execute(
-            "SELECT charge_id, kind, refunded_at FROM payment_refunds WHERE idempotency_key = ?",
-            (comp_env.idempotency_key,),
+            "SELECT charge_id, status, refunded_at FROM payments WHERE business_tx_id = ?",
+            (inv_env.business_tx_id,),
         ).fetchone()
         assert row is not None
-        assert row["kind"] == "refunded"
+        assert row["status"] == "CHARGED"  # forward row status unchanged
         assert row["charge_id"].startswith("ch-")
         assert row["refunded_at"] is not None
 
@@ -282,32 +282,56 @@ class TestRefundPayment:
         assert result["refunded"] is True
         assert result["charge_id"] == row["charge_id"]
 
+    def test_blob_download_is_called(
+        self, memory_store: Store, db_conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """blob.download must be called: satisfies §Envelope invariants, produces blob.get span."""
+        inv_env = _make_inventory_envelope(["w"], tx="tx-refund-dl")
+        payment_ref = charge_payment(inv_env)
+        payment_env = inv_env.advance("charge-payment", payment_ref)
+        comp_env = _refund_envelope(payment_env, payment_ref)
+
+        download_calls: list[str] = []
+        real_download = blob_module.download
+
+        def _spy(ref):  # type: ignore[no-untyped-def]
+            download_calls.append(ref.blob_url)
+            return real_download(ref)
+
+        monkeypatch.setattr(blob_module, "download", _spy)
+        refund_payment(comp_env)
+
+        assert download_calls == [comp_env.payload_ref.blob_url]
+
     def test_orphan_refund_writes_tombstone(
         self, memory_store: Store, db_conn: sqlite3.Connection
     ) -> None:
-        """Orphan path: no prior payment -> tombstone with kind='orphan_tombstone'."""
+        """Orphan path: no prior payment -> tombstone row in payments, kind='orphan_tombstone'."""
         payment_env = _make_payment_envelope(["w"], tx="tx-orphan-refund")
         # Use the fixture payment_ref (not written to DB via charge_payment).
         comp_env = _refund_envelope(payment_env, payment_env.payload_ref)
 
         ref = refund_payment(comp_env)
 
+        # Tombstone must land in payments under the compensation idempotency_key.
         row = db_conn.execute(
-            "SELECT charge_id, kind FROM payment_refunds WHERE idempotency_key = ?",
+            "SELECT charge_id, status, refunded_at FROM payments"
+            " WHERE idempotency_key = ?",
             (comp_env.idempotency_key,),
         ).fetchone()
         assert row is not None
         assert row["charge_id"] == "orphan"
-        assert row["kind"] == "orphan_tombstone"
+        assert row["status"] == "orphan"
+        assert row["refunded_at"] is not None
 
         result = json.loads(memory_store.read_bytes(ref.blob_url))
         assert result["kind"] == "orphan_tombstone"
 
-        # Retry is idempotent: same BlobRef returned, only one row in DB.
+        # Retry is idempotent: same BlobRef returned, still only one row.
         again = refund_payment(comp_env)
         assert ref == again
         count = db_conn.execute(
-            "SELECT COUNT(*) FROM payment_refunds WHERE business_tx_id = ?",
+            "SELECT COUNT(*) FROM payments WHERE business_tx_id = ?",
             (payment_env.business_tx_id,),
         ).fetchone()[0]
         assert count == 1
@@ -325,5 +349,10 @@ class TestRefundPayment:
         second = refund_payment(comp_env)
 
         assert first == second
-        count = db_conn.execute("SELECT COUNT(*) FROM payment_refunds").fetchone()[0]
-        assert count == 1
+        # Exactly one payments row; refunded_at is stable across retries.
+        rows = db_conn.execute(
+            "SELECT refunded_at FROM payments WHERE business_tx_id = ?",
+            (inv_env.business_tx_id,),
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["refunded_at"] is not None

@@ -48,17 +48,8 @@ CREATE TABLE IF NOT EXISTS payments (
     charge_id       TEXT NOT NULL,
     amount_cents    INTEGER NOT NULL,
     status          TEXT NOT NULL,
-    charged_at      TEXT NOT NULL
-)
-"""
-
-_REFUNDS_DDL = """
-CREATE TABLE IF NOT EXISTS payment_refunds (
-    idempotency_key TEXT PRIMARY KEY,
-    business_tx_id  TEXT NOT NULL,
-    charge_id       TEXT NOT NULL,
-    kind            TEXT NOT NULL,
-    refunded_at     TEXT NOT NULL
+    charged_at      TEXT NOT NULL,
+    refunded_at     TEXT
 )
 """
 
@@ -146,49 +137,74 @@ def refund_payment(envelope: Envelope) -> BlobRef:
     ``envelope.idempotency_key`` here is the canonical compensation key
     ``"{business_tx_id}:compensate.charge-payment:{schema_version}"``.
 
-    Lookup of the original payment uses ``business_tx_id`` because the
-    payment was stored under the forward-step idempotency key. Idempotent
-    under concurrent retries: ``INSERT OR IGNORE`` into ``payment_refunds``
-    silently drops racing duplicates; the unconditional re-read returns the
-    canonical row so every caller produces identical result bytes.
+    ``blob.download`` runs first to satisfy §Envelope invariants rule 2 and
+    produce a ``blob.get`` child span under the activity span in Jaeger.
 
-    Edge case: if no prior payment row exists (orphan compensation), a
-    tombstone row is inserted under ``envelope.idempotency_key`` so the
-    same-key retry no-ops. The blob carries ``"kind": "orphan_tombstone"``.
+    Lookup of the prior payment uses ``business_tx_id`` because the payment
+    was stored under the forward-step idempotency key (DESIGN.md §Compensation
+    rules carve-out). The ``UPDATE ... WHERE refunded_at IS NULL`` serializes
+    concurrent retries via SQLite row locks; the post-UPDATE re-read returns
+    the winning ``refunded_at`` so every caller produces identical result bytes
+    (DESIGN.md §Compensation idempotency pattern).
+
+    Edge case: if no prior payment row exists (orphan compensation), a tombstone
+    row is inserted into ``payments`` under ``envelope.idempotency_key`` so the
+    same-key retry no-ops and returns the same canonical blob. The blob carries
+    ``"kind": "orphan_tombstone"`` to distinguish it from a real refund.
     """
+    blob.download(envelope.payload_ref)  # satisfies §Envelope invariants; produces blob.get span
+
     with db.connect(_db_path()) as conn:
         conn.execute(_DDL)
-        conn.execute(_REFUNDS_DDL)
+        # Migration: add refunded_at to tables created before this column existed.
+        try:
+            conn.execute("ALTER TABLE payments ADD COLUMN refunded_at TEXT")
+        except Exception:  # noqa: BLE001
+            pass  # column already exists
 
-        payment_row = conn.execute(
-            "SELECT charge_id FROM payments WHERE business_tx_id = ?"
-            " ORDER BY charged_at DESC LIMIT 1",
+        row = conn.execute(
+            "SELECT charge_id, refunded_at FROM payments"
+            " WHERE business_tx_id = ? ORDER BY charged_at DESC LIMIT 1",
             (envelope.business_tx_id,),
         ).fetchone()
 
-        if payment_row is None:
+        if row is None:
             charge_id = "orphan"
+            refunded_at = datetime.now(UTC).isoformat()
+            conn.execute(
+                "INSERT INTO payments"
+                " (idempotency_key, business_tx_id, charge_id, amount_cents,"
+                "  status, charged_at, refunded_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    envelope.idempotency_key,
+                    envelope.business_tx_id,
+                    charge_id,
+                    0,
+                    "orphan",
+                    refunded_at,
+                    refunded_at,
+                ),
+            )
             kind = "orphan_tombstone"
         else:
-            charge_id = payment_row["charge_id"]
-            kind = "refunded"
-
-        refunded_at = datetime.now(UTC).isoformat()
-        conn.execute(
-            "INSERT OR IGNORE INTO payment_refunds"
-            " (idempotency_key, business_tx_id, charge_id, kind, refunded_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (envelope.idempotency_key, envelope.business_tx_id, charge_id, kind, refunded_at),
-        )
-        # Re-read under the same transaction to pick up whichever row won
-        # a concurrent-refund race; keeps all callers' result bytes identical.
-        row = conn.execute(
-            "SELECT charge_id, kind, refunded_at FROM payment_refunds WHERE idempotency_key = ?",
-            (envelope.idempotency_key,),
-        ).fetchone()
-        charge_id = row["charge_id"]
-        kind = row["kind"]
-        refunded_at = row["refunded_at"]
+            if row["refunded_at"] is None:
+                conn.execute(
+                    "UPDATE payments SET refunded_at = ?"
+                    " WHERE business_tx_id = ? AND refunded_at IS NULL",
+                    (datetime.now(UTC).isoformat(), envelope.business_tx_id),
+                )
+            # Re-read under the same transaction to pick up whichever timestamp
+            # won a concurrent-refund race; keeps all callers' result bytes identical.
+            persisted = conn.execute(
+                "SELECT charge_id, refunded_at FROM payments"
+                " WHERE business_tx_id = ? ORDER BY charged_at DESC LIMIT 1",
+                (envelope.business_tx_id,),
+            ).fetchone()
+            charge_id = persisted["charge_id"]
+            refunded_at = persisted["refunded_at"]
+            # An earlier retry may have written an orphan tombstone; preserve its kind.
+            kind = "orphan_tombstone" if charge_id == "orphan" else "refunded"
 
     result = {
         "business_tx_id": envelope.business_tx_id,

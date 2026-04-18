@@ -256,8 +256,7 @@ async def test_shipment_failure_triggers_two_step_reverse_compensation() -> None
     Poison stubs on TASK_QUEUE catch any misrouted compensation calls.
     Tracking stubs on the correct service queues prove both compensations ran.
     """
-    refund_calls: list[bool] = []
-    compensate_calls: list[bool] = []
+    call_order: list[str] = []
 
     @activity.defn(name="dispatch_shipment")
     def _stub_dispatch_fail(_env: Envelope) -> BlobRef:
@@ -265,12 +264,12 @@ async def test_shipment_failure_triggers_two_step_reverse_compensation() -> None
 
     @activity.defn(name="refund_payment")
     def _stub_refund_tracking(_env: Envelope) -> BlobRef:
-        refund_calls.append(True)
+        call_order.append("refund")
         return _STUB_REF
 
     @activity.defn(name="compensate_reserve_inventory")
     def _stub_compensate_tracking(_env: Envelope) -> BlobRef:
-        compensate_calls.append(True)
+        call_order.append("compensate")
         return _STUB_REF
 
     async with await WorkflowEnvironment.start_time_skipping(
@@ -318,5 +317,6 @@ async def test_shipment_failure_triggers_two_step_reverse_compensation() -> None
                         id="test-routing-shipment-fail-001",
                         task_queue=TASK_QUEUE,
                     )
-    assert refund_calls, "refund_payment must be invoked on TASK_QUEUE_C"
-    assert compensate_calls, "compensate_reserve_inventory must be invoked on TASK_QUEUE_B"
+    assert call_order == ["refund", "compensate"], (
+        f"Expected refund before compensate (reverse order), got: {call_order}"
+    )
