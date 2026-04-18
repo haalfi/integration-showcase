@@ -28,25 +28,16 @@ for full architecture details (German).
 
 ```bash
 docker compose up -d
-hatch run test
+hatch run demo-happy             # happy path — all services succeed
+hatch run demo-unhappy           # payment fails → compensate inventory
+hatch run demo-shipment-failure  # shipment fails → refund + compensate inventory
+```
 
-# Happy path: POSTs to Service A, awaits workflow completion,
-# prints Jaeger and Temporal UI deep-links for the specific run.
-hatch run scenario-happy
+Each demo starts all workers, waits for Service A, runs the saga, prints Jaeger
+and Temporal UI deep-links, then shuts everything down.
 
-# Unhappy path: launch Service C with FORCE_PAYMENT_FAILURE=true to
-# trigger the compensation branch, then run the scenario:
-#   FORCE_PAYMENT_FAILURE=true python -m integration_showcase.service_c.worker
-hatch run scenario-unhappy
-
-# Retry-then-fail path (IS-012): Service C raises a retryable PaymentGatewayError
-# on the first N attempts, then InsufficientFundsError on attempt N+1.
-# N must be < _PAYMENT_RETRY.maximum_attempts (currently 3).
-#   FORCE_PAYMENT_TRANSIENT_FAILS=2 FORCE_PAYMENT_FAILURE=true \
-#     python -m integration_showcase.service_c.worker
-# Jaeger will show 2 retried spans with exponential-backoff spacing before the
-# terminal InsufficientFundsError that triggers compensation.
-hatch run scenario-unhappy
+```bash
+hatch run test   # unit tests (no live services required)
 ```
 
 | UI | URL |
@@ -62,16 +53,25 @@ hatch run all           # lint + format-check + test (pre-commit gate)
 hatch run test          # unit tests only
 hatch run lint          # ruff check
 hatch run typecheck     # mypy
+
+# Manual scenario runners (use when workers are already running separately)
+hatch run scenario-happy
+hatch run scenario-unhappy
+hatch run scenario-shipment-failure
 ```
 
-## Config switching (remote-store)
+## Config (env vars)
 
-Blob I/O uses `remote-store`. Switch backends via env var — no code changes:
+The `demo-*` scripts set both vars automatically for local dev (Azurite). Set
+them explicitly when running workers manually or targeting a different backend:
+
+| Var | Local dev (Azurite) | Purpose |
+|---|---|---|
+| `STORE_URL` | `UseDevelopmentStorage=true` | remote-store backend |
+| `STORE_CONTAINER` | `integration-showcase` | blob container name |
 
 ```bash
-# Local dev (Azurite)
-STORE_URL="DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;..."
-
 # Production Azure
 STORE_URL=az://myaccount/workflows
+STORE_CONTAINER=my-container
 ```
