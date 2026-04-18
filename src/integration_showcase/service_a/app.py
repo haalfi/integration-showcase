@@ -13,13 +13,13 @@ from opentelemetry import baggage, trace
 from opentelemetry.context import attach, detach
 from pydantic import BaseModel
 from temporalio.client import Client
-from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
 
 from integration_showcase.shared import blob
 from integration_showcase.shared.constants import BUSINESS_TX_ID_BAGGAGE_KEY, TASK_QUEUE
 from integration_showcase.shared.envelope import BlobRef, Envelope
 from integration_showcase.shared.otel import (
+    EnvelopeTracingInterceptor,
     inject_carrier_into_envelope,
     set_envelope_span_attrs,
     setup_tracing,
@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _temporal_client = await Client.connect(
         address,
         data_converter=pydantic_data_converter,
-        interceptors=[TracingInterceptor()],
+        interceptors=[EnvelopeTracingInterceptor()],
     )
     try:
         yield

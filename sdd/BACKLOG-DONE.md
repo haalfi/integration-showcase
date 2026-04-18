@@ -1,5 +1,21 @@
 # Completed Backlog Items
 
+- [x] **BK-007 -- Preserve shipment-trigger context when compensation fails**
+  Fixed two observability gaps in `workflow/order.py` step 3:
+  **Gap A:** Added OTel span event `compensation.triggered` (with `error.type`) at the start
+  of the shipment exception handler so the original ShipmentError is always visible in traces,
+  regardless of which compensation path fails.
+  **Gap B:** Wrapped `compensate_reserve_inventory` in its own `try/except` (mirroring the
+  BK-006 pattern for `refund_payment`) so both compensation failures are captured. Decision
+  tree: if inventory compensation fails, raise that as the terminal exception (after adding a
+  `compensation.refund_failed` span event when refund also failed); if only refund fails, keep
+  `raise refund_error from None` (BK-006 semantics unchanged); if both succeed, bare re-raise
+  propagates ShipmentError. New integration test
+  `test_dual_compensation_failure_surfaces_both_failures` stubs all three (dispatch, refund,
+  compensate) to fail permanently and asserts both compensation activities ran (call_order),
+  ordering is preserved (all refund retries before compensate), and `InventoryServiceError`
+  appears in the `WorkflowFailureError` cause chain.
+
 - [x] **IS-015 -- Self-contained demo runners**
   Added `scenarios/_demo.py` with shared infrastructure (`_ensure_azurite_container`,
   `_build_worker_env`, `_start_workers`, `_stop_workers`, `_wait_ready`, `run_demo`).
@@ -131,14 +147,20 @@
   executes on the failure path, so a future regression cannot silently revert the ordering.
 
 - [x] **IS-008 -- Workflow-level span attributes**
-  Added `trace` + `set_envelope_span_attrs` imports to `workflow/order.py`
-  (inside `workflow.unsafe.imports_passed_through()`). After the `run_id` backfill,
-  `set_envelope_span_attrs` is called on `trace.get_current_span()` with a copy of the
-  envelope where `step_id="workflow"`, tagging the `RunWorkflow:OrderWorkflow` span
-  created by `TracingInterceptor` with all six required business attributes.
-  New integration test `tests/integration/test_workflow_span_attrs.py` verifies the span
-  carries `business_tx_id`, `workflow_id`, `run_id`, `step_id="workflow"`,
-  `payload_ref_sha256`, and `schema_version` when the workflow runs with `TracingInterceptor`.
+  `RunWorkflow:OrderWorkflow` span carries six envelope business attributes via a custom
+  `_EnvelopeTracingWorkflowInterceptor` (subclass of `TracingWorkflowInboundInterceptor`).
+  The subclass overrides `execute_workflow` (extracts envelope attrs, stores in
+  `self._run_wf_attrs`) and `_completed_span` (injects attrs as `additional_attributes`
+  for `RunWorkflow:*` spans). A matching `_EnvelopeTracingInterceptor` (subclass of
+  `TracingInterceptor`) overrides `workflow_interceptor_class` to register the extern
+  function and return the custom inbound class. This is the correct approach because
+  `_completed_span` creates and ends the span BEFORE the workflow body runs, so
+  `trace.get_current_span()` inside the workflow body is always a no-op for RunWorkflow
+  (the original IS-008 implementation was a silent no-op; fixed here).
+  Integration test `tests/integration/test_workflow_span_attrs.py` verifies all six attrs:
+  `business_tx_id`, `workflow_id`, `run_id` (backfilled), `step_id="workflow"`,
+  `payload_ref_sha256`, and `schema_version`. Also asserts the cross-span invariant:
+  every `RunWorkflow:*` and `RunActivity:*` span in the execution carries `business_tx_id`.
 
 - [x] **IS-013 -- Service A `POST /order` returns 202 Accepted**
   Added `status_code=202` to `@app.post("/order")` in `service_a/app.py`.

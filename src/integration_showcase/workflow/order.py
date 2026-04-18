@@ -4,8 +4,9 @@ Steps: reserve-inventory -> charge-payment -> dispatch-shipment.
 Payment failure triggers compensation of reserve-inventory (single step).
 Shipment failure triggers reverse-order two-step compensation:
   refund-payment first, then release-reservation.
-  If refund_payment exhausts its retry budget, compensate_reserve_inventory
-  still runs; the refund error is then re-raised as the workflow failure.
+  Both compensation steps are isolated so one failure does not suppress the other.
+  On any compensation failure, zero-duration OTel compensation spans record the full
+  error context (shipment trigger, refund outcome, inventory-release outcome).
 """
 
 from __future__ import annotations
@@ -16,15 +17,13 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from opentelemetry import trace
-
     from integration_showcase.shared.constants import (
         TASK_QUEUE_B,
         TASK_QUEUE_C,
         TASK_QUEUE_D,
     )
     from integration_showcase.shared.envelope import BlobRef, Envelope
-    from integration_showcase.shared.otel import set_envelope_span_attrs
+    from integration_showcase.shared.otel import emit_workflow_compensation_span
     from integration_showcase.workflow.envelopes import (
         compensate_reserve_inventory_envelope,
         refund_payment_envelope,
@@ -63,15 +62,6 @@ class OrderWorkflow:
         # activity span (IS-005) sees a stable run_id without needing activity.info().
         if not envelope.run_id:
             envelope = envelope.model_copy(update={"run_id": workflow.info().run_id})
-
-        # Tag the TracingInterceptor RunWorkflow span with the six required business
-        # attributes (IS-008). step_id="workflow" is a fixed saga-root marker for this
-        # span only — the envelope passed to activities keeps step_id="start" so that
-        # envelope.advance("reserve-inventory", ...) correctly sets parent_step_id="start".
-        set_envelope_span_attrs(
-            trace.get_current_span(),
-            envelope.model_copy(update={"step_id": "workflow"}),
-        )
 
         # Step 1: Reserve inventory
         inventory_ref: BlobRef = await workflow.execute_activity(
@@ -121,13 +111,15 @@ class OrderWorkflow:
                 retry_policy=_SHIPMENT_RETRY,
                 task_queue=TASK_QUEUE_D,
             )
-        except Exception:
+        except Exception as shipment_exc:
             # Reverse-order compensation: refund payment first, then release inventory.
-            # refund_payment is isolated so a permanent refund failure does not
-            # short-circuit compensate_reserve_inventory (BK-006).
-            # Known gap (BK-007): if compensate_reserve_inventory exhausts its
-            # retry budget the captured refund_error is dropped and only the
-            # inventory-compensation failure surfaces.
+            # Both steps are isolated so one failure never suppresses the other (BK-006/007).
+            _sc = getattr(shipment_exc, "cause", shipment_exc)
+            emit_workflow_compensation_span(
+                "Compensation:Triggered",
+                {"error.type": getattr(_sc, "type", None) or type(_sc).__name__},
+            )
+
             refund_envelope = refund_payment_envelope(payment_envelope, payment_ref)
             refund_error: Exception | None = None
             try:
@@ -140,20 +132,41 @@ class OrderWorkflow:
                 )
             except Exception as exc:
                 refund_error = exc
+
             compensate_envelope = compensate_reserve_inventory_envelope(
                 inventory_envelope, inventory_ref
             )
-            await workflow.execute_activity(
-                "compensate_reserve_inventory",
-                compensate_envelope,
-                start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=_COMPENSATE_RETRY,
-                task_queue=TASK_QUEUE_B,
-            )
+            compensate_error: Exception | None = None
+            try:
+                await workflow.execute_activity(
+                    "compensate_reserve_inventory",
+                    compensate_envelope,
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=_COMPENSATE_RETRY,
+                    task_queue=TASK_QUEUE_B,
+                )
+            except Exception as exc:
+                compensate_error = exc
+
             if refund_error is not None:
-                # Both failures are in Temporal's event history; suppress Python's
-                # implicit context chain to avoid a misleading "caused by" link between
-                # two independent saga failures.
+                _rc = getattr(refund_error, "cause", refund_error)
+                emit_workflow_compensation_span(
+                    "Compensation:RefundFailed",
+                    {"error.type": getattr(_rc, "type", None) or type(_rc).__name__},
+                )
+            if compensate_error is not None:
+                _cc = getattr(compensate_error, "cause", compensate_error)
+                emit_workflow_compensation_span(
+                    "Compensation:InventoryReleaseFailed",
+                    {"error.type": getattr(_cc, "type", None) or type(_cc).__name__},
+                )
+
+            if compensate_error is not None:
+                raise compensate_error from None
+            if refund_error is not None:
+                # Both failures are in Temporal's event history and span events;
+                # suppress Python's implicit context chain to avoid a misleading
+                # "caused by" link between two independent saga failures.
                 raise refund_error from None
             raise
 

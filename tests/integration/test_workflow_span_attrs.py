@@ -11,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from temporalio import activity
-from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -23,6 +22,7 @@ from integration_showcase.shared.constants import (
     TASK_QUEUE_D,
 )
 from integration_showcase.shared.envelope import BlobRef, Envelope
+from integration_showcase.shared.otel import EnvelopeTracingInterceptor
 from integration_showcase.workflow.order import OrderWorkflow
 
 _STUB_REF = BlobRef(blob_url="stub/ref.json", sha256="a" * 64)
@@ -78,7 +78,7 @@ async def test_workflow_span_has_six_business_attrs(spans: InMemorySpanExporter)
                     env.client,
                     task_queue=TASK_QUEUE,
                     workflows=[OrderWorkflow],
-                    interceptors=[TracingInterceptor()],
+                    interceptors=[EnvelopeTracingInterceptor(always_create_workflow_spans=True)],
                 ),
                 Worker(
                     env.client,

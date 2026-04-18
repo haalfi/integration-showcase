@@ -10,8 +10,10 @@ from __future__ import annotations
 import functools
 import inspect
 import os
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
+import temporalio.worker
+import temporalio.workflow
 from opentelemetry import baggage, propagate, trace
 from opentelemetry import context as context_api
 from opentelemetry.baggage.propagation import W3CBaggagePropagator
@@ -22,6 +24,7 @@ from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from temporalio import activity
+from temporalio.contrib.opentelemetry import TracingInterceptor, TracingWorkflowInboundInterceptor
 
 from integration_showcase.shared.envelope import Envelope
 from integration_showcase.shared.log_setup import setup_logging
@@ -250,3 +253,79 @@ def instrument_activity(
             context_api.detach(token)
 
     return wrapper
+
+
+def emit_workflow_compensation_span(name: str, attributes: dict[str, str]) -> None:
+    """Emit a zero-duration OTel span from within the Temporal workflow body.
+
+    Inside the workflow sandbox ``trace.get_current_span()`` is always
+    ``INVALID_SPAN`` because the RunWorkflow span is created and ended by
+    ``_completed_span`` *before* the workflow body runs.  This helper reaches
+    the active interceptor via the public static
+    ``TracingWorkflowInboundInterceptor._from_context()`` and delegates to its
+    ``_completed_span`` method -- the only correct OTel emission path from
+    workflow code.  Falls back silently when no interceptor is present (unit
+    tests that do not wire a TracingInterceptor).
+    """
+    interceptor = TracingWorkflowInboundInterceptor._from_context()
+    if interceptor is not None:
+        # _completed_span is a private method; pinning temporalio<2 in
+        # pyproject.toml guards against silent breakage on upgrades.
+        interceptor._completed_span(name, additional_attributes=attributes)
+
+
+class _EnvelopeTracingWorkflowInboundInterceptor(TracingWorkflowInboundInterceptor):
+    """Injects six envelope business attrs into RunWorkflow spans.
+
+    ``_completed_span`` is a private method of ``TracingWorkflowInboundInterceptor``.
+    Pinning ``temporalio<2`` in pyproject.toml guards against silent breakage
+    on upgrades -- verify the override still works on each version bump.
+    """
+
+    async def execute_workflow(self, input: temporalio.worker.ExecuteWorkflowInput) -> Any:
+        env = input.args[0] if input.args else None
+        self._run_wf_attrs: dict[str, str] = {}
+        if env is not None:
+            run_id = getattr(env, "run_id", None) or temporalio.workflow.info().run_id
+            ref = getattr(env, "payload_ref", None)
+            self._run_wf_attrs = {
+                k: v
+                for k, v in {
+                    "business_tx_id": getattr(env, "business_tx_id", None),
+                    "workflow_id": getattr(env, "workflow_id", None),
+                    "run_id": run_id,
+                    "step_id": "workflow",
+                    "payload_ref_sha256": getattr(ref, "sha256", None) if ref else None,
+                    "schema_version": getattr(env, "schema_version", None),
+                }.items()
+                if v
+            }
+        return await super().execute_workflow(input)
+
+    def _completed_span(
+        self, span_name: str, *, additional_attributes: Any = None, **kwargs: Any
+    ) -> None:
+        attrs = getattr(self, "_run_wf_attrs", {})
+        if span_name.startswith("RunWorkflow:") and attrs:
+            additional_attributes = {**(additional_attributes or {}), **attrs}
+        return super()._completed_span(
+            span_name, additional_attributes=additional_attributes, **kwargs
+        )
+
+
+class EnvelopeTracingInterceptor(TracingInterceptor):
+    """TracingInterceptor that stamps six envelope business attrs onto RunWorkflow spans.
+
+    Drop-in replacement for ``TracingInterceptor()`` in all workers and clients.
+    Accepts the same constructor arguments (e.g. ``always_create_workflow_spans``).
+
+    The underlying mechanism overrides ``_completed_span`` -- a private method of
+    ``TracingWorkflowInboundInterceptor``.  Pinning ``temporalio<2`` in
+    pyproject.toml guards against silent breakage on SDK upgrades.
+    """
+
+    def workflow_interceptor_class(
+        self, input: temporalio.worker.WorkflowInterceptorClassInput
+    ) -> type[TracingWorkflowInboundInterceptor]:
+        super().workflow_interceptor_class(input)  # registers extern function
+        return _EnvelopeTracingWorkflowInboundInterceptor
