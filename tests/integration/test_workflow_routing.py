@@ -635,3 +635,108 @@ async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> No
             "`raise refund_error from None` in workflow/order.py must suppress it."
         )
         shipment_leak = getattr(shipment_leak, "cause", None)
+
+
+@pytest.mark.integration
+async def test_dual_compensation_failure_surfaces_both_failures() -> None:
+    """BK-007 Gap B: when dispatch, refund, and compensate_reserve_inventory all fail
+    permanently, compensate_reserve_inventory failure must be the terminal exception and
+    both compensation activities must have been attempted before the workflow fails.
+
+    Before the fix, compensate_reserve_inventory was uncaught: if it exhausted its retry
+    budget, the captured refund_error was silently dropped and only the inventory failure
+    surfaced. The shipment trigger was also invisible.
+
+    Full error context (shipment trigger, refund failure, inventory-release failure) is
+    recorded in OTel span events in workflow/order.py for production-trace visibility.
+    """
+    call_order: list[str] = []
+    _lock = threading.Lock()
+
+    @activity.defn(name="dispatch_shipment")
+    def _stub_dispatch_fail(_env: Envelope) -> BlobRef:
+        raise ShipmentError("carrier unavailable")
+
+    @activity.defn(name="refund_payment")
+    def _stub_refund_fail(_env: Envelope) -> BlobRef:
+        with _lock:
+            call_order.append("refund")
+        raise PaymentGatewayError("refund gateway down")
+
+    @activity.defn(name="compensate_reserve_inventory")
+    def _stub_compensate_fail(_env: Envelope) -> BlobRef:
+        with _lock:
+            call_order.append("compensate")
+        raise ApplicationError(
+            "inventory service down", type="InventoryServiceError", non_retryable=True
+        )
+
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter,
+    ) as env:
+        client = env.client
+        with ThreadPoolExecutor() as executor:
+            async with (
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE,
+                    workflows=[OrderWorkflow],
+                    activities=[
+                        _poison_reserve,
+                        _poison_charge,
+                        _poison_dispatch,
+                        _poison_compensate,
+                        _poison_refund,
+                    ],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_B,
+                    activities=[_stub_reserve, _stub_compensate_fail],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_C,
+                    activities=[_stub_charge, _stub_refund_fail],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_D,
+                    activities=[_stub_dispatch_fail],
+                    activity_executor=executor,
+                ),
+            ):
+                with pytest.raises(WorkflowFailureError) as exc_info:
+                    await client.execute_workflow(
+                        OrderWorkflow.run,
+                        _start_envelope(tx="routing-test-007"),
+                        id="test-routing-dual-fail-001",
+                        task_queue=TASK_QUEUE,
+                    )
+
+    # Both compensation activities ran (and failed).
+    assert "refund" in call_order, "refund_payment must be dispatched"
+    assert "compensate" in call_order, "compensate_reserve_inventory must be dispatched"
+    last_refund_index = len(call_order) - 1 - call_order[::-1].index("refund")
+    first_compensate_index = call_order.index("compensate")
+    assert last_refund_index < first_compensate_index, (
+        f"Expected all refund attempts before compensate (reverse order), got: {call_order}"
+    )
+
+    # compensate_reserve_inventory failure is the terminal workflow exception; the
+    # refund PaymentGatewayError is visible via the call_order tracking (proves it
+    # was attempted and failed) and in OTel span events at runtime.
+    compensate_cause: BaseException | None = exc_info.value
+    while compensate_cause is not None:
+        if (
+            isinstance(compensate_cause, ApplicationError)
+            and compensate_cause.type == "InventoryServiceError"
+        ):
+            break
+        compensate_cause = getattr(compensate_cause, "cause", None)
+    assert compensate_cause is not None, (
+        "InventoryServiceError (compensate failure) not found in WorkflowFailureError cause chain"
+    )

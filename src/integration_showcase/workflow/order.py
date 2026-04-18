@@ -4,8 +4,9 @@ Steps: reserve-inventory -> charge-payment -> dispatch-shipment.
 Payment failure triggers compensation of reserve-inventory (single step).
 Shipment failure triggers reverse-order two-step compensation:
   refund-payment first, then release-reservation.
-  If refund_payment exhausts its retry budget, compensate_reserve_inventory
-  still runs; the refund error is then re-raised as the workflow failure.
+  Both compensation steps are isolated so one failure does not suppress the other.
+  On any compensation failure, OTel span events record the full error context
+  (shipment trigger, refund outcome, inventory-release outcome).
 """
 
 from __future__ import annotations
@@ -121,13 +122,16 @@ class OrderWorkflow:
                 retry_policy=_SHIPMENT_RETRY,
                 task_queue=TASK_QUEUE_D,
             )
-        except Exception:
+        except Exception as shipment_exc:
             # Reverse-order compensation: refund payment first, then release inventory.
-            # refund_payment is isolated so a permanent refund failure does not
-            # short-circuit compensate_reserve_inventory (BK-006).
-            # Known gap (BK-007): if compensate_reserve_inventory exhausts its
-            # retry budget the captured refund_error is dropped and only the
-            # inventory-compensation failure surfaces.
+            # Both steps are isolated so one failure never suppresses the other (BK-006/007).
+            span = trace.get_current_span()
+            _sc = getattr(shipment_exc, "cause", shipment_exc)
+            span.add_event(
+                "compensation.triggered",
+                {"error.type": getattr(_sc, "type", type(_sc).__name__)},
+            )
+
             refund_envelope = refund_payment_envelope(payment_envelope, payment_ref)
             refund_error: Exception | None = None
             try:
@@ -140,20 +144,41 @@ class OrderWorkflow:
                 )
             except Exception as exc:
                 refund_error = exc
+
             compensate_envelope = compensate_reserve_inventory_envelope(
                 inventory_envelope, inventory_ref
             )
-            await workflow.execute_activity(
-                "compensate_reserve_inventory",
-                compensate_envelope,
-                start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=_COMPENSATE_RETRY,
-                task_queue=TASK_QUEUE_B,
-            )
+            compensate_error: Exception | None = None
+            try:
+                await workflow.execute_activity(
+                    "compensate_reserve_inventory",
+                    compensate_envelope,
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=_COMPENSATE_RETRY,
+                    task_queue=TASK_QUEUE_B,
+                )
+            except Exception as exc:
+                compensate_error = exc
+
             if refund_error is not None:
-                # Both failures are in Temporal's event history; suppress Python's
-                # implicit context chain to avoid a misleading "caused by" link between
-                # two independent saga failures.
+                _rc = getattr(refund_error, "cause", refund_error)
+                span.add_event(
+                    "compensation.refund_failed",
+                    {"error.type": getattr(_rc, "type", type(_rc).__name__)},
+                )
+            if compensate_error is not None:
+                _cc = getattr(compensate_error, "cause", compensate_error)
+                span.add_event(
+                    "compensation.inventory_release_failed",
+                    {"error.type": getattr(_cc, "type", type(_cc).__name__)},
+                )
+
+            if compensate_error is not None:
+                raise compensate_error from None
+            if refund_error is not None:
+                # Both failures are in Temporal's event history and span events;
+                # suppress Python's implicit context chain to avoid a misleading
+                # "caused by" link between two independent saga failures.
                 raise refund_error from None
             raise
 

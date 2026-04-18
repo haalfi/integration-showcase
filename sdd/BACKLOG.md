@@ -35,31 +35,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 Ordered by recommended execution: concept-first (sets the acceptance bar),
 then small-wins, then the substantive code work, then cleanup.
 
-- [ ] **BK-007 -- Preserve shipment-trigger context when compensation fails**
-  Follow-up to BK-006. Two related UX gaps in `workflow/order.py` step 3:
-
-  **Gap A — only refund fails (today's `raise refund_error from None`):** the
-  original `ShipmentError` trigger is suppressed via `from None`, so an operator
-  reading the failed workflow sees "refund failed" with no direct pointer to the
-  shipment that started compensation. The cause is discoverable via Temporal's
-  activity event history, but not from the workflow failure chain itself.
-
-  **Gap B — both compensations fail:** `compensate_reserve_inventory` is uncaught.
-  If it exhausts `_COMPENSATE_RETRY`, control exits the outer `except Exception:`
-  before `if refund_error is not None: raise refund_error from None`, so the
-  refund failure is silently dropped and only the inventory-compensation failure
-  surfaces. The shipment trigger is also only in Python's `__context__` (outer
-  except has no `as` binding).
-
-  Acceptance for both gaps: the workflow failure cause chain (or an associated
-  span/log event) must expose the original shipment trigger and, in the dual-failure
-  case, both compensation failures. Cross-check Temporal failure-model constraints
-  from BK-006 (only `FailureError` subclasses fail the workflow; `ExceptionGroup`
-  would retry the workflow task).
-  Integration test for Gap B: stub all three of dispatch, refund, and compensate
-  to fail permanently; assert the refund `PaymentGatewayError` is visible in
-  the outcome alongside the inventory-compensation failure.
-
 - [ ] **BK-005 -- Remove direct Azure SDK bypass in `shared/blob.py`**
   IS-014 added `_set_azure_blob_metadata()` which opens its own `BlobServiceClient` to call
   `set_blob_metadata()`. This violates `DESIGN.md § remote-store usage` (Blob I/O goes

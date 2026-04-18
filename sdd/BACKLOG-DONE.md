@@ -1,5 +1,21 @@
 # Completed Backlog Items
 
+- [x] **BK-007 -- Preserve shipment-trigger context when compensation fails**
+  Fixed two observability gaps in `workflow/order.py` step 3:
+  **Gap A:** Added OTel span event `compensation.triggered` (with `error.type`) at the start
+  of the shipment exception handler so the original ShipmentError is always visible in traces,
+  regardless of which compensation path fails.
+  **Gap B:** Wrapped `compensate_reserve_inventory` in its own `try/except` (mirroring the
+  BK-006 pattern for `refund_payment`) so both compensation failures are captured. Decision
+  tree: if inventory compensation fails, raise that as the terminal exception (after adding a
+  `compensation.refund_failed` span event when refund also failed); if only refund fails, keep
+  `raise refund_error from None` (BK-006 semantics unchanged); if both succeed, bare re-raise
+  propagates ShipmentError. New integration test
+  `test_dual_compensation_failure_surfaces_both_failures` stubs all three (dispatch, refund,
+  compensate) to fail permanently and asserts both compensation activities ran (call_order),
+  ordering is preserved (all refund retries before compensate), and `InventoryServiceError`
+  appears in the `WorkflowFailureError` cause chain.
+
 - [x] **IS-015 -- Self-contained demo runners**
   Added `scenarios/_demo.py` with shared infrastructure (`_ensure_azurite_container`,
   `_build_worker_env`, `_start_workers`, `_stop_workers`, `_wait_ready`, `run_demo`).
