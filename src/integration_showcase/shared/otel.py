@@ -67,7 +67,7 @@ class BaggageBusinessAttrSpanProcessor(SpanProcessor):
         ctx = parent_context if parent_context is not None else context_api.get_current()
         for key in _BUSINESS_ATTR_BAGGAGE_KEYS:
             value = baggage.get_baggage(key, context=ctx)
-            if value:
+            if value is not None:
                 span.set_attribute(key, str(value))
 
     def on_end(self, span: ReadableSpan) -> None:  # noqa: ARG002
@@ -194,21 +194,24 @@ def _envelope_baggage_context(envelope: Envelope) -> Context:
         ("payload_ref_sha256", envelope.payload_ref.sha256),
         ("schema_version", envelope.schema_version),
     ):
-        if value:
-            ctx = baggage.set_baggage(key, value, context=ctx)
+        ctx = baggage.set_baggage(key, str(value), context=ctx)
     return ctx
 
 
 def instrument_activity(
     fn: Callable[..., _R],
 ) -> Callable[..., _R]:
-    """Tag the current span with the six required business attributes.
+    """Tag the current span and propagate business attrs to child spans.
 
     The ``TracingInterceptor`` creates a ``RunActivity:*`` span as the
     current span around every activity invocation; this decorator reads
     the incoming :class:`Envelope` (first positional arg), backfills
     ``run_id`` from :func:`temporalio.activity.info` when the caller
-    didn't supply one, and tags the span. Any additional positional or
+    didn't supply one, and tags the span with the six required business
+    attributes. Additionally, all six attrs are written into W3C baggage
+    before *fn* is called and removed after, so that child spans (e.g.
+    ``store.write`` blob ops) can pick them up via
+    :class:`BaggageBusinessAttrSpanProcessor`. Any additional positional or
     keyword arguments are forwarded unchanged to *fn*.
 
     Works for both ``def`` and ``async def`` activities: the wrapper

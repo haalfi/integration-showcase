@@ -35,21 +35,20 @@ def _envelope(**overrides: object) -> Envelope:
 class TestBaggageBusinessAttrSpanProcessor:
     def test_stamps_six_attrs_from_baggage(self, spans: InMemorySpanExporter) -> None:
         """Child span created inside baggage context carries all six business attrs."""
-        token = attach(baggage.set_baggage("business_tx_id", "tx-bk004"))
-        token2 = attach(baggage.set_baggage("workflow_id", "order-bk004"))
-        token3 = attach(baggage.set_baggage("run_id", "run-bk004"))
-        token4 = attach(baggage.set_baggage("step_id", "reserve"))
-        token5 = attach(baggage.set_baggage("payload_ref_sha256", "abcd1234"))
-        token6 = attach(baggage.set_baggage("schema_version", "1.0"))
+        from opentelemetry import context as context_api
+
+        ctx = context_api.get_current()
+        ctx = baggage.set_baggage("business_tx_id", "tx-bk004", context=ctx)
+        ctx = baggage.set_baggage("workflow_id", "order-bk004", context=ctx)
+        ctx = baggage.set_baggage("run_id", "run-bk004", context=ctx)
+        ctx = baggage.set_baggage("step_id", "reserve", context=ctx)
+        ctx = baggage.set_baggage("payload_ref_sha256", "abcd1234", context=ctx)
+        ctx = baggage.set_baggage("schema_version", "1.0", context=ctx)
+        token = attach(ctx)
         try:
             with _tracer.start_as_current_span("store.write"):
                 pass
         finally:
-            detach(token6)
-            detach(token5)
-            detach(token4)
-            detach(token3)
-            detach(token2)
             detach(token)
 
         (recorded,) = spans.get_finished_spans()
@@ -189,6 +188,26 @@ class TestInstrumentActivityAsync:
         assert child_attrs["payload_ref_sha256"] == "deadbeef"
         assert child_attrs["schema_version"] == "1.0"
 
+    async def test_child_spans_with_empty_run_id_still_get_six_attrs(
+        self, spans: InMemorySpanExporter
+    ) -> None:
+        """Child spans carry all six attrs even when run_id is empty (e.g. at ingress)."""
+
+        @instrument_activity
+        async def _probe(envelope: Envelope) -> Envelope:
+            with _tracer.start_as_current_span("store.write"):
+                pass
+            return envelope
+
+        env = _envelope(run_id="")
+        with _tracer.start_as_current_span("RunActivity:probe"):
+            await _probe(env)
+
+        recorded = {s.name: s for s in spans.get_finished_spans()}
+        child_attrs = recorded["store.write"].attributes or {}
+        assert child_attrs["business_tx_id"] == "tx-001"
+        assert child_attrs["run_id"] == ""  # empty but present
+
 
 class TestInstrumentActivityDecorator:
     def test_tags_current_span_when_called_in_activity_env(
@@ -243,6 +262,32 @@ class TestInstrumentActivityDecorator:
         assert child_attrs["step_id"] == "start"
         assert child_attrs["payload_ref_sha256"] == "deadbeef"
         assert child_attrs["schema_version"] == "1.0"
+
+    def test_child_spans_with_empty_run_id_still_get_six_attrs_sync(
+        self, spans: InMemorySpanExporter
+    ) -> None:
+        """Sync activities backfill empty run_id from activity context and propagate it."""
+
+        @instrument_activity
+        def _probe(envelope: Envelope) -> Envelope:
+            with _tracer.start_as_current_span("store.write"):
+                pass
+            return envelope
+
+        env = _envelope(run_id="")
+
+        def _run() -> None:
+            with _tracer.start_as_current_span("RunActivity:probe"):
+                _probe(env)
+
+        ActivityEnvironment().run(_run)
+
+        recorded = {s.name: s for s in spans.get_finished_spans()}
+        child_attrs = recorded["store.write"].attributes or {}
+        assert child_attrs["business_tx_id"] == "tx-001"
+        # ActivityEnvironment backfills run_id, so it's no longer empty; just assert presence
+        assert "run_id" in child_attrs
+        assert child_attrs["run_id"]  # non-empty after backfill
 
     def test_backfills_run_id_from_activity_info(self, spans: InMemorySpanExporter) -> None:
         captured: dict[str, Envelope] = {}
