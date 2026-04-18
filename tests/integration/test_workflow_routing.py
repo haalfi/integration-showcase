@@ -527,6 +527,10 @@ async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> No
     compensate_reserve_inventory is always dispatched regardless of refund outcome.
     """
     call_order: list[str] = []
+    # Lock guards appends from activity worker threads. Temporal retries sync
+    # activities sequentially today, but the lock makes the assumption explicit
+    # rather than invisible — consistent with the other tracking tests in this file.
+    _order_lock = threading.Lock()
 
     @activity.defn(name="dispatch_shipment")
     def _stub_dispatch_fail(_env: Envelope) -> BlobRef:
@@ -534,12 +538,14 @@ async def test_refund_failure_does_not_skip_compensate_reserve_inventory() -> No
 
     @activity.defn(name="refund_payment")
     def _stub_refund_permanent_fail(_env: Envelope) -> BlobRef:
-        call_order.append("refund")
+        with _order_lock:
+            call_order.append("refund")
         raise PaymentGatewayError("refund gateway down")
 
     @activity.defn(name="compensate_reserve_inventory")
     def _stub_compensate_tracking(_env: Envelope) -> BlobRef:
-        call_order.append("compensate")
+        with _order_lock:
+            call_order.append("compensate")
         return _STUB_REF
 
     async with await WorkflowEnvironment.start_time_skipping(

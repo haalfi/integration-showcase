@@ -129,7 +129,7 @@ class OrderWorkflow:
             # retry budget the captured refund_error is dropped and only the
             # inventory-compensation failure surfaces.
             refund_envelope = refund_payment_envelope(payment_envelope, payment_ref)
-            refund_error: BaseException | None = None
+            refund_error: Exception | None = None
             try:
                 await workflow.execute_activity(
                     "refund_payment",
