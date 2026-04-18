@@ -16,6 +16,7 @@ test server.
 
 from __future__ import annotations
 
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -26,6 +27,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from integration_showcase.service_c.activities import InsufficientFundsError, PaymentGatewayError
 from integration_showcase.service_d.activities import ShipmentError
 from integration_showcase.shared.constants import (
     TASK_QUEUE,
@@ -34,7 +36,10 @@ from integration_showcase.shared.constants import (
     TASK_QUEUE_D,
 )
 from integration_showcase.shared.envelope import BlobRef, Envelope
-from integration_showcase.workflow.order import OrderWorkflow
+from integration_showcase.workflow.order import (
+    _PAYMENT_RETRY,
+    OrderWorkflow,
+)
 
 # ---------------------------------------------------------------------------
 # Shared stub helpers
@@ -331,3 +336,180 @@ async def test_shipment_failure_triggers_two_step_reverse_compensation() -> None
             break
         cause = getattr(cause, "cause", None)
     assert cause is not None, "ShipmentError not found in WorkflowFailureError cause chain"
+
+
+@pytest.mark.integration
+async def test_retry_then_fail_payment_path_triggers_compensation() -> None:
+    """§5.2 retry-then-fail: charge_payment raises retryable PaymentGatewayError on
+    attempts 1-2, then non-retryable InsufficientFundsError on attempt 3.
+    Compensation must still run (compensate_reserve_inventory on TASK_QUEUE_B).
+
+    This is the acceptance test for IS-012: the workflow must not short-circuit
+    compensation just because payment was retried before failing terminally.
+    """
+    charge_attempts: list[int] = []
+    compensate_calls: list[bool] = []
+    # Lock guards append+len so the stub is safe if the executor ever dispatches
+    # concurrent calls. Temporal retries sync activities sequentially today, but
+    # the lock makes the assumption explicit rather than invisible.
+    _counter_lock = threading.Lock()
+
+    @activity.defn(name="charge_payment")
+    def _stub_charge_retry_then_fail(_env: Envelope) -> BlobRef:
+        with _counter_lock:
+            charge_attempts.append(1)
+            attempt = len(charge_attempts)
+        # Retryable on attempts 1..(maximum_attempts-1); terminal on maximum_attempts.
+        # The guard mirrors _PAYMENT_RETRY.maximum_attempts so that a change to the
+        # retry budget in order.py forces an update here rather than silently breaking.
+        # Real exception classes (not ApplicationError wrappers) exercise Temporal's
+        # type-name-based retry classification end-to-end: the SDK serialises the class
+        # name as the ApplicationError type, which _PAYMENT_RETRY.non_retryable_error_types
+        # then matches against.
+        if attempt < _PAYMENT_RETRY.maximum_attempts:
+            raise PaymentGatewayError(f"gateway_timeout on attempt {attempt}")
+        raise InsufficientFundsError("insufficient funds")
+
+    @activity.defn(name="compensate_reserve_inventory")
+    def _stub_compensate_tracking(_env: Envelope) -> BlobRef:
+        compensate_calls.append(True)
+        return _STUB_REF
+
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter,
+    ) as env:
+        client = env.client
+        with ThreadPoolExecutor() as executor:
+            async with (
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE,
+                    workflows=[OrderWorkflow],
+                    activities=[
+                        _poison_reserve,
+                        _poison_charge,
+                        _poison_dispatch,
+                        _poison_compensate,
+                        _poison_refund,
+                    ],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_B,
+                    activities=[_stub_reserve, _stub_compensate_tracking],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_C,
+                    activities=[_stub_charge_retry_then_fail, _stub_refund],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_D,
+                    activities=[_stub_dispatch],
+                    activity_executor=executor,
+                ),
+            ):
+                with pytest.raises(WorkflowFailureError) as exc_info:
+                    await client.execute_workflow(
+                        OrderWorkflow.run,
+                        _start_envelope(tx="routing-test-004"),
+                        id="test-routing-retry-then-fail-001",
+                        task_queue=TASK_QUEUE,
+                    )
+
+    expected = _PAYMENT_RETRY.maximum_attempts
+    assert len(charge_attempts) == expected, (
+        f"Expected {expected} charge_payment attempts ({expected - 1} retryable + 1 terminal),"
+        f" got {len(charge_attempts)}"
+    )
+    assert compensate_calls, (
+        "compensate_reserve_inventory must be invoked after terminal payment failure"
+    )
+
+    cause: BaseException | None = exc_info.value
+    while cause is not None:
+        if isinstance(cause, ApplicationError) and cause.type == "InsufficientFundsError":
+            break
+        cause = getattr(cause, "cause", None)
+    assert cause is not None, "InsufficientFundsError not found in WorkflowFailureError cause chain"
+
+
+@pytest.mark.integration
+async def test_payment_retry_budget_exhaustion_triggers_compensation() -> None:
+    """Retry budget: charge_payment raises retryable PaymentGatewayError on every attempt.
+    After maximum_attempts Temporal gives up; the workflow's except still runs compensation.
+
+    This complements test_retry_then_fail_payment_path_triggers_compensation: that test
+    exercises the non_retryable terminal switch; this one verifies the retry budget itself
+    is honoured — the stub never becomes non-retryable, yet compensation fires.
+    """
+    charge_attempts: list[int] = []
+    compensate_calls: list[bool] = []
+    _counter_lock = threading.Lock()
+
+    @activity.defn(name="charge_payment")
+    def _stub_charge_always_gateway_error(_env: Envelope) -> BlobRef:
+        with _counter_lock:
+            charge_attempts.append(1)
+        raise PaymentGatewayError("gateway_timeout (budget exhaustion test)")
+
+    @activity.defn(name="compensate_reserve_inventory")
+    def _stub_compensate_tracking(_env: Envelope) -> BlobRef:
+        compensate_calls.append(True)
+        return _STUB_REF
+
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter,
+    ) as env:
+        client = env.client
+        with ThreadPoolExecutor() as executor:
+            async with (
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE,
+                    workflows=[OrderWorkflow],
+                    activities=[
+                        _poison_reserve,
+                        _poison_charge,
+                        _poison_dispatch,
+                        _poison_compensate,
+                        _poison_refund,
+                    ],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_B,
+                    activities=[_stub_reserve, _stub_compensate_tracking],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_C,
+                    activities=[_stub_charge_always_gateway_error, _stub_refund],
+                    activity_executor=executor,
+                ),
+                Worker(
+                    client,
+                    task_queue=TASK_QUEUE_D,
+                    activities=[_stub_dispatch],
+                    activity_executor=executor,
+                ),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await client.execute_workflow(
+                        OrderWorkflow.run,
+                        _start_envelope(tx="routing-test-005"),
+                        id="test-routing-budget-exhaust-001",
+                        task_queue=TASK_QUEUE,
+                    )
+
+    assert len(charge_attempts) == _PAYMENT_RETRY.maximum_attempts, (
+        f"Expected {_PAYMENT_RETRY.maximum_attempts} attempts before budget exhaustion,"
+        f" got {len(charge_attempts)}"
+    )
+    assert compensate_calls, "compensate_reserve_inventory must run even after budget exhaustion"

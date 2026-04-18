@@ -7,6 +7,18 @@ persists payment state in a private SQLite DB keyed on
 Set ``FORCE_PAYMENT_FAILURE=true`` to trigger ``InsufficientFundsError``,
 which is non-retryable in ``OrderWorkflow`` and drives compensation.
 
+Set ``FORCE_PAYMENT_TRANSIENT_FAILS=N`` to raise a retryable
+``PaymentGatewayError`` on the first N attempts; attempt N+1 then either
+succeeds or raises ``InsufficientFundsError`` depending on
+``FORCE_PAYMENT_FAILURE``.  Demonstrates the §5.2 retry-then-fail sequence
+with exponential-backoff spacing visible in Jaeger (IS-012).
+**Warning:** N must be strictly less than ``_PAYMENT_RETRY.maximum_attempts``
+(currently 3).  Setting ``N >= maximum_attempts`` means the terminal attempt
+also raises ``PaymentGatewayError``, which Temporal exhausts retries on; the
+workflow still compensates (``except Exception`` catches it) but the root
+cause type in the failure history will be ``PaymentGatewayError`` rather than
+``InsufficientFundsError``.
+
 ``refund_payment`` compensates a prior ``charge_payment``. It follows the
 same orphan-tombstone pattern as ``compensate_reserve_inventory``: if no
 payment row is found the activity inserts a tombstone so retries are no-ops.
@@ -33,6 +45,22 @@ from integration_showcase.shared.otel import instrument_activity
 
 class InsufficientFundsError(Exception):
     """Non-retryable: payment declined due to insufficient funds."""
+
+
+class PaymentGatewayError(Exception):
+    """Retryable: transient gateway failure (timeout, network error, etc.)."""
+
+
+def _get_attempt() -> int:
+    """Return the current Temporal activity attempt number (1-based).
+
+    Module-level seam so unit tests can monkeypatch without a live Temporal context.
+    Function form (not a module-level attribute) so
+    ``monkeypatch.setattr(module, "_get_attempt", lambda: N)`` replaces the
+    entire callable — consistent with how other Temporal-context-dependent
+    seams should be structured in this codebase.
+    """
+    return activity.info().attempt
 
 
 _DB_PATH_ENV = "SERVICE_C_DB_PATH"
@@ -67,19 +95,34 @@ def _db_path() -> str:
 def charge_payment(envelope: Envelope) -> BlobRef:
     """Charge payment. Idempotent per ``envelope.idempotency_key``.
 
-    ``blob.download`` runs before the failure check so that the demo trace
-    in Jaeger shows a ``blob.get`` child span under the failed
-    ``charge_payment`` span, aligning with §5.2's pattern of a blob GET
-    preceding the payment error.  Note: §5.2's full retry-then-fail sequence
-    (attempt 1 = gateway_timeout, attempt 2 = insufficient_funds) is tracked
-    separately by IS-012.  A blob-store outage will surface as a retryable
-    error rather than the deterministic ``InsufficientFundsError``; the
-    previous guarantee ("failure check runs before any I/O") no longer holds.
-    ``InsufficientFundsError`` remains the workflow's non-retryable signal
-    to start compensation when the blob store is healthy.
+    ``blob.download`` runs before both the transient-fail guard
+    (``FORCE_PAYMENT_TRANSIENT_FAILS``) and the hard-fail guard
+    (``FORCE_PAYMENT_FAILURE``), so that every attempt — including retried
+    ones — shows a ``blob.get`` child span in Jaeger beneath the
+    ``charge_payment`` span.  This aligns with §5.2's trace shape (blob GET
+    precedes the payment decision) on all paths.  Side-effect: on transient-fail
+    retries Jaeger shows ``blob.get`` → ``gateway_timeout``; a reader should
+    interpret that as "the blob was fetched, then the gateway decision
+    fired", not as the blob call causing the timeout.  A blob-store outage on
+    any attempt will surface as a retryable error rather than the deterministic
+    ``InsufficientFundsError``; the previous guarantee ("failure check runs
+    before any I/O") no longer holds.  ``InsufficientFundsError`` remains the
+    workflow's non-retryable signal to start compensation when the blob store
+    is healthy.
     """
     input_bytes = blob.download(envelope.payload_ref)
     input_data = json.loads(input_bytes)
+
+    try:
+        transient_n = max(0, int(os.environ.get("FORCE_PAYMENT_TRANSIENT_FAILS", "0")))
+    except ValueError:
+        transient_n = 0
+    if transient_n > 0:
+        attempt = _get_attempt()
+        if attempt <= transient_n:
+            raise PaymentGatewayError(
+                f"gateway_timeout on attempt {attempt} for business_tx_id={envelope.business_tx_id}"
+            )
 
     if os.environ.get("FORCE_PAYMENT_FAILURE", "").lower() == "true":
         raise InsufficientFundsError(
