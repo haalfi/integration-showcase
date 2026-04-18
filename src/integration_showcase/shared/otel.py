@@ -271,7 +271,7 @@ def emit_workflow_compensation_span(name: str, attributes: dict[str, str]) -> No
     if interceptor is not None:
         # _completed_span is a private method; pinning temporalio<2 in
         # pyproject.toml guards against silent breakage on upgrades.
-        interceptor._completed_span(name, additional_attributes=attributes)  # type: ignore[attr-defined]
+        interceptor._completed_span(name, additional_attributes=attributes)
 
 
 class _EnvelopeTracingWorkflowInboundInterceptor(TracingWorkflowInboundInterceptor):
@@ -302,7 +302,9 @@ class _EnvelopeTracingWorkflowInboundInterceptor(TracingWorkflowInboundIntercept
             }
         return await super().execute_workflow(input)
 
-    def _completed_span(self, span_name: str, *, additional_attributes=None, **kwargs) -> None:  # type: ignore[override]
+    def _completed_span(
+        self, span_name: str, *, additional_attributes: Any = None, **kwargs: Any
+    ) -> None:
         attrs = getattr(self, "_run_wf_attrs", {})
         if span_name.startswith("RunWorkflow:") and attrs:
             additional_attributes = {**(additional_attributes or {}), **attrs}
