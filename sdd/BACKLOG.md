@@ -35,15 +35,6 @@ Items graduate: **Idea -> Backlog -> Spec -> Tests -> Code**.
 Ordered by recommended execution: concept-first (sets the acceptance bar),
 then small-wins, then the substantive code work, then cleanup.
 
-- [ ] **BK-003 -- BlobRef.version_id field hygiene**
-  `BlobRef.etag` is now populated from `Store.get_file_info()` post-write (IS-010).
-  `BlobRef.version_id` remains `""` — Azure blob versioning is not enabled in this
-  showcase and remote-store v0.23.0 does not surface a version ID in `FileInfo`.
-  Options: (a) enable versioning in the Azurite/Azure container and check whether
-  `FileInfo.extra` carries the version ID from the Azure SDK response; (b) drop
-  `version_id` from `BlobRef` and the concept §3 envelope as dead weight.
-  Decide when the demo story needs version-based immutability guarantees.
-
 - [ ] **BK-005 -- Remove direct Azure SDK bypass in `shared/blob.py`**
   IS-014 added `_set_azure_blob_metadata()` which opens its own `BlobServiceClient` to call
   `set_blob_metadata()`. This violates `DESIGN.md § remote-store usage` (Blob I/O goes
