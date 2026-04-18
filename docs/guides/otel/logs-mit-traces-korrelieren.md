@@ -7,6 +7,8 @@
 
 ## Felder, die jedes Log-Event trägt
 
+**Pflicht** (Regel O-3):
+
 | Feld              | Quelle                                               |
 | ----------------- | ---------------------------------------------------- |
 | `timestamp`       | UTC, ISO 8601, Millisekundenauflösung                |
@@ -16,9 +18,14 @@
 | `trace_id`        | aus aktivem Span                                     |
 | `span_id`         | aus aktivem Span                                     |
 | `business_tx_id`  | aus Baggage (oder explizit gesetzt)                  |
-| `workflow_id`     | aus Baggage                                          |
-| `run_id`          | aus Baggage                                          |
-| `step_id`         | aus Baggage                                          |
+
+**Empfehlung** (zusätzliche Korrelation für fachliche Queries):
+
+| Feld              | Quelle       |
+| ----------------- | ------------ |
+| `workflow_id`     | aus Baggage  |
+| `run_id`          | aus Baggage  |
+| `step_id`         | aus Baggage  |
 
 Alle Felder snake_case, flach. Kein Verschachteln von Objekten, außer
 explizitem `error = {type, message, stacktrace}`.

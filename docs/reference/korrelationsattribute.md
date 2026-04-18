@@ -17,18 +17,22 @@ müssen.
 
 ## Sichtbarkeit nach Kanal
 
-| Attribut              | Envelope | Baggage | Span-Attribut | Log-Feld | Blob-Metadata |
-| --------------------- | :------: | :-----: | :-----------: | :------: | :-----------: |
-| `business_tx_id`      | ja       | ja      | ja            | ja       | indirekt [^1] |
-| `workflow_id`         | ja       | ja      | ja            | ja       | ja            |
-| `run_id`              | ja       | ja      | ja            | ja       | ja            |
-| `step_id`             | ja       | ja      | ja            | ja       | ja            |
-| `payload_ref_sha256`  | ja       | nein    | ja            | ja       | ja (als ETag-nahe Integrität; Backend-spezifisch) |
-| `schema_version`      | ja       | ja      | ja            | ja       | ja            |
+| Attribut              | Envelope | Baggage | Span-Attribut | Log-Feld     | Blob-Metadata                                     |
+| --------------------- | :------: | :-----: | :-----------: | :----------: | :-----------------------------------------------: |
+| `business_tx_id`      | ja       | ja      | ja            | ja           | indirekt [^1]                                     |
+| `workflow_id`         | ja       | ja      | ja            | optional [^2]| ja                                                |
+| `run_id`              | ja       | ja      | ja            | optional [^2]| ja                                                |
+| `step_id`             | ja       | ja      | ja            | optional [^2]| ja                                                |
+| `payload_ref_sha256`  | ja       | nein    | ja            | optional [^2]| ja (als ETag-nahe Integrität; Backend-spezifisch) |
+| `schema_version`      | ja       | ja      | ja            | optional [^2]| ja                                                |
 
 [^1]: `business_tx_id` steckt im Blob-Pfad
 (`workflows/{business_tx_id}/…`); eine zusätzliche Metadata-Zeile ist
 üblich, aber nicht strikt erforderlich.
+
+[^2]: Regel O-3 fordert in Logs nur `business_tx_id`, `trace_id`,
+`span_id`. Die übrigen vier können zusätzlich injiziert werden, wenn
+der Downstream-Log-Backend es wünscht; Pflicht ist es nicht.
 
 ## Kanal-Details
 

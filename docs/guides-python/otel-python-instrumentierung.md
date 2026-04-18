@@ -18,23 +18,31 @@ Volle Implementierung:
   `on_start` und setzt die sechs Business-Attribute als
   Span-Attribute. So tragen auch Library-Spans (`blob.put`,
   `db.query`) die IDs.
-- **`EnvelopeTracingInterceptor`** (Temporal-Interceptor): extrahiert
-  `traceparent` und Baggage aus dem Envelope, öffnet den Activity-Span
-  als Kind.
+- **`EnvelopeTracingInterceptor`** (Temporal-Interceptor): erweitert
+  den Standard-`TracingInterceptor` und stempelt die sechs
+  Business-Attribute zusätzlich auf die `RunWorkflow:*`-Spans. Die
+  W3C-Trace-Context-Propagation läuft weiterhin über die
+  Temporal-eigenen Header, nicht über die Envelope-Carrier-Felder.
 - **`instrument_activity`-Decorator** publiziert Envelope-Werte
   **vor** dem Activity-Body in den OTel-Kontext (Baggage + aktive
   Attribute), damit der Span-Processor sie beim Start sieht.
-- **Strukturierte JSON-Logs** via Custom-Formatter in
-  `log_setup.py`: injiziert `trace_id`, `span_id`, `business_tx_id`,
-  `workflow_id`, `run_id`, `step_id` in jede Log-Zeile.
+- **Strukturierte JSON-Logs** via `JsonFormatter` + `OtelContextFilter`
+  in `log_setup.py`: injiziert `trace_id`, `span_id` und
+  `business_tx_id` in jede Log-Zeile. Die übrigen drei
+  Korrelations-Attribute (`workflow_id`, `run_id`, `step_id`) sind im
+  Showcase **nicht** Log-Felder; die sprachagnostische Guideline
+  (siehe `guides/otel/logs-mit-traces-korrelieren.md`) empfiehlt sie,
+  `log_setup.py` implementiert nur den Kernsatz.
 
 ## Fallstricke in Python
 
 - **`trace.get_current_span()` im Workflow-Body** liefert
   `INVALID_SPAN`. Für den Workflow-Span den vom Temporal-OTel-Contrib
   gelieferten Handle verwenden; im Showcase: über `_from_context()`.
-- **Baggage-Werte `""`**: der Processor filtert leere Strings, damit
-  das Ingress-Blob-`run_id=""` nicht als Span-Attribut landet.
+- **Baggage-Werte `""`**: der Processor filtert **nur** `None`, nicht
+  leere Strings. Ein `run_id = ""` (Ingress-Blob vor `StartWorkflow`)
+  landet bewusst als Span-Attribut; das macht die Abwesenheit des
+  echten Werts in der Telemetrie explizit sichtbar.
 - **Pydantic-Typen im Log-Record**: `extra={"envelope": env}` erzeugt
   beim JSON-Formatter Default-Fehler. Nur primitive Werte oder
   explizites `env.model_dump()` übergeben.
