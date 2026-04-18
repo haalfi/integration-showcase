@@ -68,7 +68,7 @@ Standard-Set (die sechs Business-Attribute):
    - Als Decorator oder Interceptor, der Envelope-Felder automatisch in
      Baggage setzt.
 
-## Reihenfolge matters
+## Reihenfolge beachten!
 
 Der Processor liest Baggage beim Span-**Start**. Wer Baggage erst
 **innerhalb** eines Spans setzt, beobachtet keinen Effekt auf diesen

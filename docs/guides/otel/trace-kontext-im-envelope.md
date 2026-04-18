@@ -77,9 +77,7 @@ with tracer.start_as_current_span("activity.reserve-inventory",
 
 ## Temporal-Besonderheiten
 
-- **Activity-Spans** sind **nicht** automatisch Kinder des Workflow-
-  Spans, es sei denn, der Envelope trägt den Context und der Worker
-  extrahiert ihn. Genau das ist der Sinn der drei Envelope-Felder.
+- **Activity-Spans** sind **nicht** automatisch Kinder des Workflow-Spans, es sei denn, der Envelope trägt den Context und der Worker extrahiert ihn. Genau das ist der Sinn der drei Envelope-Felder.
 - **Retries** öffnen pro Attempt einen eigenen Span. Alle Attempts
   hängen am selben Parent (dem Workflow-Span), sind also Geschwister,
   nicht verschachtelt.
