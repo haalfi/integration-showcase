@@ -293,15 +293,25 @@ class TestTransientFailures:
         ref = charge_payment(env)
         assert memory_store.read_bytes(ref.blob_url)
 
+    @pytest.mark.parametrize(
+        "value",
+        ["not-a-number", "-1", "-99"],
+        ids=["non-numeric", "negative-one", "large-negative"],
+    )
     def test_invalid_env_var_treated_as_zero(
         self,
         memory_store: Store,
         db_conn: sqlite3.Connection,
         monkeypatch: pytest.MonkeyPatch,
+        value: str,
     ) -> None:
-        """Non-integer FORCE_PAYMENT_TRANSIENT_FAILS must not crash; treated as 0."""
-        monkeypatch.setenv("FORCE_PAYMENT_TRANSIENT_FAILS", "not-a-number")
-        env = _make_inventory_envelope(["w"], tx="tx-transient-invalid")
+        """Non-positive or non-integer FORCE_PAYMENT_TRANSIENT_FAILS must not crash.
+
+        Non-numeric values raise ValueError and fall back to 0. Negative integers are
+        clamped to 0 via max(0, ...). Both are inert: the activity succeeds normally.
+        """
+        monkeypatch.setenv("FORCE_PAYMENT_TRANSIENT_FAILS", value)
+        env = _make_inventory_envelope(["w"], tx=f"tx-transient-{value.lstrip('-')}")
 
         ref = charge_payment(env)
         assert memory_store.read_bytes(ref.blob_url)
@@ -312,11 +322,12 @@ class TestTransientFailures:
         db_conn: sqlite3.Connection,  # noqa: ARG002
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """N >= maximum_attempts footgun: the terminal attempt still raises PaymentGatewayError.
+        """N >= maximum_attempts footgun: charge_payment still raises PaymentGatewayError on
+        the attempt that would otherwise be the terminal one (attempt == maximum_attempts).
 
-        The workflow compensates anyway (its except catches all errors), but the root-cause
-        type in the failure history is PaymentGatewayError rather than InsufficientFundsError.
-        This test documents the behaviour so the footgun is visible in the test suite.
+        Documents the misconfiguration hazard at the function level. Temporal-level
+        consequences (budget exhaustion, cause-chain type, compensation) are covered by
+        the integration test test_payment_retry_budget_exhaustion_triggers_compensation.
         """
         monkeypatch.setenv("FORCE_PAYMENT_TRANSIENT_FAILS", "3")  # N == maximum_attempts
         monkeypatch.setattr(svc_c_module, "_get_attempt", lambda: 3)  # the "final" attempt

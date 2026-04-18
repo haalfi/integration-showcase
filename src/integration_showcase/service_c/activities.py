@@ -55,6 +55,10 @@ def _get_attempt() -> int:
     """Return the current Temporal activity attempt number (1-based).
 
     Module-level seam so unit tests can monkeypatch without a live Temporal context.
+    Function form (not a module-level attribute) so
+    ``monkeypatch.setattr(module, "_get_attempt", lambda: N)`` replaces the
+    entire callable — consistent with how other Temporal-context-dependent
+    seams should be structured in this codebase.
     """
     return activity.info().attempt
 
@@ -110,7 +114,7 @@ def charge_payment(envelope: Envelope) -> BlobRef:
     input_data = json.loads(input_bytes)
 
     try:
-        transient_n = int(os.environ.get("FORCE_PAYMENT_TRANSIENT_FAILS", "0"))
+        transient_n = max(0, int(os.environ.get("FORCE_PAYMENT_TRANSIENT_FAILS", "0")))
     except ValueError:
         transient_n = 0
     if transient_n > 0:

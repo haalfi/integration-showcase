@@ -38,6 +38,15 @@ hatch run scenario-happy
 # trigger the compensation branch, then run the scenario:
 #   FORCE_PAYMENT_FAILURE=true python -m integration_showcase.service_c.worker
 hatch run scenario-unhappy
+
+# Retry-then-fail path (IS-012): Service C raises a retryable PaymentGatewayError
+# on the first N attempts, then InsufficientFundsError on attempt N+1.
+# N must be < _PAYMENT_RETRY.maximum_attempts (currently 3).
+#   FORCE_PAYMENT_TRANSIENT_FAILS=2 FORCE_PAYMENT_FAILURE=true \
+#     python -m integration_showcase.service_c.worker
+# Jaeger will show 2 retried spans with exponential-backoff spacing before the
+# terminal InsufficientFundsError that triggers compensation.
+hatch run scenario-unhappy
 ```
 
 | UI | URL |
