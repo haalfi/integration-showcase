@@ -26,6 +26,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from integration_showcase.service_d.activities import ShipmentError
 from integration_showcase.shared.constants import (
     TASK_QUEUE,
     TASK_QUEUE_B,
@@ -260,7 +261,9 @@ async def test_shipment_failure_triggers_two_step_reverse_compensation() -> None
 
     @activity.defn(name="dispatch_shipment")
     def _stub_dispatch_fail(_env: Envelope) -> BlobRef:
-        raise ApplicationError("carrier unavailable", type="ShipmentError", non_retryable=False)
+        # Raise the real exception so Temporal's type-name serialization is exercised
+        # end-to-end (find_application_error in run_shipment_failure.py matches on this).
+        raise ShipmentError("carrier unavailable")
 
     @activity.defn(name="refund_payment")
     def _stub_refund_tracking(_env: Envelope) -> BlobRef:

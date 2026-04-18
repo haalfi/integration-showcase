@@ -44,6 +44,13 @@ _PAYMENT_RETRY = RetryPolicy(
     non_retryable_error_types=["InsufficientFundsError"],
 )
 
+_SHIPMENT_RETRY = RetryPolicy(
+    maximum_attempts=3,
+    initial_interval=timedelta(seconds=2),
+    backoff_coefficient=2.0,
+    non_retryable_error_types=["ShipmentError"],
+)
+
 
 @workflow.defn
 class OrderWorkflow:
@@ -103,13 +110,17 @@ class OrderWorkflow:
 
         payment_envelope = inventory_envelope.advance("charge-payment", payment_ref)
 
-        # Step 3: Dispatch shipment -- compensate payment then reservation on failure
+        # Step 3: Dispatch shipment -- compensate payment then reservation on failure.
+        # ShipmentError is non-retryable so compensation starts immediately (matches
+        # InsufficientFundsError / payment path UX). Known gap: if refund_payment
+        # exhausts _COMPENSATE_RETRY, compensate_reserve_inventory is never reached
+        # and the reservation remains live until operator intervention (BK-006).
         try:
             await workflow.execute_activity(
                 "dispatch_shipment",
                 payment_envelope,
                 start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=_DEFAULT_RETRY,
+                retry_policy=_SHIPMENT_RETRY,
                 task_queue=TASK_QUEUE_D,
             )
         except Exception:

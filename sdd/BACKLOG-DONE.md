@@ -2,8 +2,8 @@
 
 - [x] **IS-011 -- Full compensation tree**
   Added `refund_payment` activity to `service_c/activities.py` (orphan-tombstone pattern,
-  `compensate.charge-payment` step, `payment_refunds` SQLite table; mirrors
-  `compensate_reserve_inventory` from Service B). Extended `OrderWorkflow` to wrap
+  `compensate.charge-payment` step, `refunded_at TEXT` column added to the existing
+  `payments` table; mirrors `compensate_reserve_inventory` from Service B). Extended `OrderWorkflow` to wrap
   `dispatch_shipment` in a try/except that runs two-step reverse-order compensation on
   any failure: `refund_payment` (TASK_QUEUE_C) then `compensate_reserve_inventory`
   (TASK_QUEUE_B). Added `refund_payment_envelope()` helper to `workflow/envelopes.py` as

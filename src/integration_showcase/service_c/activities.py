@@ -142,9 +142,10 @@ def refund_payment(envelope: Envelope) -> BlobRef:
 
     Lookup of the prior payment uses ``business_tx_id`` because the payment
     was stored under the forward-step idempotency key (DESIGN.md §Compensation
-    rules carve-out). The ``UPDATE ... WHERE refunded_at IS NULL`` serializes
-    concurrent retries via SQLite row locks; the post-UPDATE re-read returns
-    the winning ``refunded_at`` so every caller produces identical result bytes
+    rules carve-out). The ``UPDATE ... WHERE refunded_at IS NULL`` achieves
+    idempotency: SQLite's database-level write lock ensures only one concurrent
+    caller can commit the timestamp; the post-UPDATE re-read returns the winning
+    ``refunded_at`` so every caller produces identical result bytes
     (DESIGN.md §Compensation idempotency pattern).
 
     Edge case: if no prior payment row exists (orphan compensation), a tombstone
@@ -156,12 +157,12 @@ def refund_payment(envelope: Envelope) -> BlobRef:
 
     with db.connect(_db_path()) as conn:
         conn.execute(_DDL)
-        # Migration: add refunded_at to tables created before this column existed.
-        try:
-            conn.execute("ALTER TABLE payments ADD COLUMN refunded_at TEXT")
-        except Exception:  # noqa: BLE001
-            pass  # column already exists
 
+        # Invariant: this activity is only dispatched after charge_payment succeeds, so a
+        # CHARGED row always exists in `payments` for this business_tx_id when called in
+        # production. The orphan path is a defensive fallback for edge cases (manual replay,
+        # tests). A real CHARGED row can never appear *after* an orphan tombstone because the
+        # workflow never retries charge_payment once it has started compensation.
         row = conn.execute(
             "SELECT charge_id, refunded_at FROM payments"
             " WHERE business_tx_id = ? ORDER BY charged_at DESC LIMIT 1",
