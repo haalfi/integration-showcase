@@ -168,9 +168,16 @@ def list_transactions() -> list[TxListing]:
     return [TxListing(business_tx_id=name) for name in blob.list_folders(_BLOBS_ROOT)]
 
 
+def _validate_path_segment(value: str, param: str) -> None:
+    """Reject segments that could escape ``workflows/`` via traversal."""
+    if "/" in value or value.startswith("."):
+        raise HTTPException(status_code=400, detail=f"invalid {param}: {value!r}")
+
+
 @app.get("/blobs/{business_tx_id}", response_model=list[BlobListing])
 def list_transaction_blobs(business_tx_id: str) -> list[BlobListing]:
     """List all blobs persisted for *business_tx_id* (input, per-step results)."""
+    _validate_path_segment(business_tx_id, "business_tx_id")
     entries = blob.list_files(f"{_BLOBS_ROOT}/{business_tx_id}")
     if not entries:
         raise HTTPException(status_code=404, detail=f"no blobs for {business_tx_id!r}")
@@ -180,6 +187,8 @@ def list_transaction_blobs(business_tx_id: str) -> list[BlobListing]:
 @app.get("/blobs/{business_tx_id}/{name}")
 def read_transaction_blob(business_tx_id: str, name: str) -> Response:
     """Return the raw bytes of a single blob. All saga blobs are JSON."""
+    _validate_path_segment(business_tx_id, "business_tx_id")
+    _validate_path_segment(name, "name")
     path = f"{_BLOBS_ROOT}/{business_tx_id}/{name}"
     try:
         data = blob.read_path(path)

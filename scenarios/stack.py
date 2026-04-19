@@ -19,11 +19,18 @@ Making failure modes per-request is a separate backlog item.
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import sys
 from pathlib import Path
 
-from scenarios._demo import _start_workers, _stop_workers, _wait_ready
+from scenarios._demo import (
+    _WORKER_SETTLE_DELAY,
+    _ensure_azurite_container,
+    _start_workers,
+    _stop_workers,
+    _wait_ready,
+)
 
 _STACK_LOG = Path("./tmp/stack.log")
 
@@ -42,8 +49,6 @@ def _print_urls() -> None:
 
 
 async def main() -> int:
-    from scenarios._demo import _ensure_azurite_container
-
     _STACK_LOG.parent.mkdir(exist_ok=True)
     try:
         _ensure_azurite_container()
@@ -54,8 +59,6 @@ async def main() -> int:
     # STORE_URL/CONTAINER must be set for Service A's lifespan Temporal client
     # and blob I/O. _demo.run_demo() sets these via os.environ.setdefault; we
     # replicate that here so users can launch stack without pre-exporting.
-    import os
-
     os.environ.setdefault("STORE_URL", "UseDevelopmentStorage=true")
     os.environ.setdefault("STORE_CONTAINER", "integration-showcase")
 
@@ -64,6 +67,10 @@ async def main() -> int:
         try:
             print(f"Starting Service A + 4 workers (logs → {_STACK_LOG})...", flush=True)
             await _wait_ready()
+            # Mirror run_demo(): workers need time to register on Temporal task
+            # queues after Service A is up; firing POST /order before this delay
+            # triggers StartToCloseTimeout on the first execution.
+            await asyncio.sleep(_WORKER_SETTLE_DELAY)
             _print_urls()
 
             # Block until SIGINT/SIGTERM. asyncio.Event + signal handlers is the

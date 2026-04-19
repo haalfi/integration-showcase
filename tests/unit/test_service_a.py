@@ -272,3 +272,22 @@ class TestBlobBrowser:
     ) -> None:
         response = await client.get("/blobs/tx-1/no-such-file.json")
         assert response.status_code == 404
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            # ASGI normalises ``..`` before routing (e.g. /blobs/../x → /blobs/x),
+            # so ``..`` segments never reach the path parameter. We test the cases
+            # our validator actually sees: a literal dot-prefix or slash in the value.
+            "/blobs/.hidden",
+            "/blobs/tx-1/.hidden.json",
+        ],
+    )
+    async def test_traversal_segments_return_400(
+        self,
+        client: httpx.AsyncClient,
+        memory_store: Store,  # noqa: ARG002
+        url: str,
+    ) -> None:
+        response = await client.get(url)
+        assert response.status_code == 400
