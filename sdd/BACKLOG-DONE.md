@@ -1,5 +1,19 @@
 # Completed Backlog Items
 
+- [x] **IS-017 -- Interactive stack runner + blob browser**
+  Added a long-running, clickable mode alongside the existing one-shot `demo-*`
+  scripts. `scenarios/stack.py` (exposed as `hatch run stack`) reuses
+  `_start_workers` / `_wait_ready` from `scenarios/_demo.py`, blocks on
+  `asyncio.Event` until SIGINT/SIGTERM, and tears workers down cleanly (Windows:
+  `CTRL_BREAK_EVENT`; Unix: `SIGTERM`). Blob browser: three read-only
+  `GET /blobs[/…]` endpoints in `service_a/app.py` backed by three thin helpers
+  in `shared/blob.py` (`list_folders`, `list_files`, `read_path`) that preserve
+  the existing `_store_factory` test seam. README gained an "Interactive mode"
+  section pointing users at `/docs` (FastAPI Swagger) and `/blobs` (covers the
+  Azurite-no-UI gap) instead of the raw `:10000` SDK endpoint. Failure injection
+  (`FORCE_*` env vars) remains startup-only, called out explicitly; making it
+  per-request is deferred.
+
 - [x] **IS-016 -- User-facing docs tree (Diataxis)**
   Added `docs/` with a Diataxis-structured, language-agnostic documentation set
   (German). Layout: `konzept.md` as the normative frame, `reference/` (fields,

@@ -41,11 +41,30 @@ and Temporal UI deep-links, then shuts everything down.
 hatch run test   # unit tests (no live services required)
 ```
 
+## Interactive mode
+
+The `demo-*` commands drive a single hard-coded scenario and exit. To click
+around the API yourself — fire arbitrary orders, inspect blobs, watch traces —
+use `hatch run stack` instead:
+
+```bash
+docker compose up -d   # infra: Temporal, Azurite, Jaeger, Temporal UI
+hatch run stack        # app:   Service A + workflow + B/C/D workers (Ctrl-C to stop)
+```
+
+The stack stays up until Ctrl-C. Worker logs stream to `./tmp/stack.log`.
+
 | UI | URL |
 |---|---|
+| Service A Swagger (fire orders) | http://localhost:8000/docs |
+| Service A blob browser | http://localhost:8000/blobs |
 | Jaeger traces | http://localhost:16686 |
 | Temporal workflows | http://localhost:8088 |
 | Azurite blob storage | http://localhost:10000 |
+
+Failure injection (`FORCE_PAYMENT_FAILURE=true`, `FORCE_SHIPMENT_FAILURE=true`,
+`FORCE_PAYMENT_TRANSIENT_FAILS=N`) is read at worker startup, so set it in the
+shell *before* `hatch run stack` — you cannot toggle a scenario per request today.
 
 ## Dev commands
 

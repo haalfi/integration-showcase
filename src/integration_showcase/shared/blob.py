@@ -106,6 +106,24 @@ def upload(data: bytes, path: str, *, metadata: dict[str, str] | None = None) ->
     return BlobRef(blob_url=path, sha256=sha256, etag=etag)
 
 
+def list_folders(prefix: str) -> list[str]:
+    """Return the immediate subfolder names under *prefix* (empty list if missing)."""
+    with _store_factory() as store:
+        return [entry.name for entry in store.list_folders(prefix)]
+
+
+def list_files(prefix: str) -> list[tuple[str, str, int]]:
+    """Return ``(name, path, size)`` for every blob under *prefix* (recursive = False)."""
+    with _store_factory() as store:
+        return [(info.name, str(info.path), info.size) for info in store.list_files(prefix)]
+
+
+def read_path(path: str) -> bytes:
+    """Read raw bytes at *path*. Raises ``remote_store.NotFound`` when absent."""
+    with _store_factory() as store:
+        return store.read_bytes(path)
+
+
 def download(ref: BlobRef) -> bytes:
     """Fetch the blob described by *ref* and verify its SHA-256 digest.
 

@@ -8,10 +8,12 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from opentelemetry import baggage, trace
 from opentelemetry.context import attach, detach
 from pydantic import BaseModel
+from remote_store import NotFound
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 
@@ -138,3 +140,58 @@ async def create_order(request: OrderRequest) -> OrderResponse:
         workflow_id=workflow_id,
         traceparent=envelope.traceparent,
     )
+
+
+# --- Blob browser ----------------------------------------------------------
+# Azurite ships no UI, so we expose a minimal read-only browser over the saga's
+# ``workflows/{business_tx_id}/*`` blob tree. Read-only by design — the saga is
+# the sole writer.
+
+_BLOBS_ROOT = "workflows"
+
+
+class BlobListing(BaseModel):
+    """One entry in ``GET /blobs/{business_tx_id}``."""
+
+    name: str
+    path: str
+    size: int
+
+
+class TxListing(BaseModel):
+    business_tx_id: str
+
+
+@app.get("/blobs", response_model=list[TxListing])
+def list_transactions() -> list[TxListing]:
+    """List every business_tx_id that has at least one blob written."""
+    return [TxListing(business_tx_id=name) for name in blob.list_folders(_BLOBS_ROOT)]
+
+
+def _validate_path_segment(value: str, param: str) -> None:
+    """Reject segments that could escape ``workflows/`` via traversal."""
+    if "/" in value or value.startswith("."):
+        raise HTTPException(status_code=400, detail=f"invalid {param}: {value!r}")
+
+
+@app.get("/blobs/{business_tx_id}", response_model=list[BlobListing])
+def list_transaction_blobs(business_tx_id: str) -> list[BlobListing]:
+    """List all blobs persisted for *business_tx_id* (input, per-step results)."""
+    _validate_path_segment(business_tx_id, "business_tx_id")
+    entries = blob.list_files(f"{_BLOBS_ROOT}/{business_tx_id}")
+    if not entries:
+        raise HTTPException(status_code=404, detail=f"no blobs for {business_tx_id!r}")
+    return [BlobListing(name=name, path=path, size=size) for name, path, size in entries]
+
+
+@app.get("/blobs/{business_tx_id}/{name}")
+def read_transaction_blob(business_tx_id: str, name: str) -> Response:
+    """Return the raw bytes of a single blob. All saga blobs are JSON."""
+    _validate_path_segment(business_tx_id, "business_tx_id")
+    _validate_path_segment(name, "name")
+    path = f"{_BLOBS_ROOT}/{business_tx_id}/{name}"
+    try:
+        data = blob.read_path(path)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=f"blob not found: {path}") from exc
+    return Response(content=data, media_type="application/json")

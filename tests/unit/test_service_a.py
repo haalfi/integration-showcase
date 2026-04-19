@@ -208,3 +208,86 @@ class TestCreateOrder:
         ) as ac:
             response = await ac.post("/order", json=_VALID_ORDER)
         assert response.status_code == 500
+
+
+class TestBlobBrowser:
+    """Read-only blob browser for the saga's ``workflows/{tx_id}/*`` tree."""
+
+    async def test_list_transactions_empty(
+        self,
+        client: httpx.AsyncClient,
+        memory_store: Store,  # noqa: ARG002
+    ) -> None:
+        response = await client.get("/blobs")
+        assert response.status_code == 200
+        assert response.json() == []
+
+    async def test_list_transactions_returns_every_tx(
+        self, client: httpx.AsyncClient, memory_store: Store
+    ) -> None:
+        memory_store.write("workflows/tx-1/input.json", b"{}", overwrite=True)
+        memory_store.write("workflows/tx-1/reserve-inventory.json", b"{}", overwrite=True)
+        memory_store.write("workflows/tx-2/input.json", b"{}", overwrite=True)
+        response = await client.get("/blobs")
+        assert response.status_code == 200
+        ids = sorted(item["business_tx_id"] for item in response.json())
+        assert ids == ["tx-1", "tx-2"]
+
+    async def test_list_transaction_blobs_returns_files(
+        self, client: httpx.AsyncClient, memory_store: Store
+    ) -> None:
+        memory_store.write("workflows/tx-1/input.json", b'{"a":1}', overwrite=True)
+        memory_store.write(
+            "workflows/tx-1/reserve-inventory.json", b'{"reservation_id":"r1"}', overwrite=True
+        )
+        response = await client.get("/blobs/tx-1")
+        assert response.status_code == 200
+        by_name = {item["name"]: item for item in response.json()}
+        assert set(by_name) == {"input.json", "reserve-inventory.json"}
+        assert by_name["input.json"]["size"] == len(b'{"a":1}')
+        assert by_name["input.json"]["path"] == "workflows/tx-1/input.json"
+
+    async def test_list_transaction_blobs_unknown_tx_returns_404(
+        self,
+        client: httpx.AsyncClient,
+        memory_store: Store,  # noqa: ARG002
+    ) -> None:
+        response = await client.get("/blobs/no-such-tx")
+        assert response.status_code == 404
+
+    async def test_read_transaction_blob_returns_json_bytes(
+        self, client: httpx.AsyncClient, memory_store: Store
+    ) -> None:
+        payload = b'{"items":["widget-1"],"customer_id":"cust-001"}'
+        memory_store.write("workflows/tx-1/input.json", payload, overwrite=True)
+        response = await client.get("/blobs/tx-1/input.json")
+        assert response.status_code == 200
+        assert response.content == payload
+        assert response.headers["content-type"].startswith("application/json")
+
+    async def test_read_transaction_blob_missing_returns_404(
+        self,
+        client: httpx.AsyncClient,
+        memory_store: Store,  # noqa: ARG002
+    ) -> None:
+        response = await client.get("/blobs/tx-1/no-such-file.json")
+        assert response.status_code == 404
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            # ASGI normalises ``..`` before routing (e.g. /blobs/../x → /blobs/x),
+            # so ``..`` segments never reach the path parameter. We test the cases
+            # our validator actually sees: a literal dot-prefix or slash in the value.
+            "/blobs/.hidden",
+            "/blobs/tx-1/.hidden.json",
+        ],
+    )
+    async def test_traversal_segments_return_400(
+        self,
+        client: httpx.AsyncClient,
+        memory_store: Store,  # noqa: ARG002
+        url: str,
+    ) -> None:
+        response = await client.get(url)
+        assert response.status_code == 400
