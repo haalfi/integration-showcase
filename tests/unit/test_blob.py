@@ -12,7 +12,7 @@ from remote_store import Capability, FileInfo, NotFound, Store
 from remote_store.backends import MemoryBackend
 
 import integration_showcase.shared.blob as blob_module
-from integration_showcase.shared.blob import download, upload
+from integration_showcase.shared.blob import download, list_files, list_folders, read_path, upload
 from integration_showcase.shared.envelope import BlobRef
 
 
@@ -235,3 +235,30 @@ class TestDownload:
         ref = upload(b"", "empty/payload.bin")
         result = download(ref)
         assert result == b""
+
+
+class TestListingHelpers:
+    """``list_folders`` / ``list_files`` / ``read_path`` helpers feed the Service A browser."""
+
+    def test_list_folders_returns_subfolder_names(self, store: Store) -> None:
+        store.write("workflows/tx-1/input.json", b"{}", overwrite=True)
+        store.write("workflows/tx-2/input.json", b"{}", overwrite=True)
+        assert sorted(list_folders("workflows")) == ["tx-1", "tx-2"]
+
+    def test_list_folders_missing_prefix_returns_empty(self, store: Store) -> None:
+        assert list_folders("nothing-here") == []
+
+    def test_list_files_returns_name_path_size(self, store: Store) -> None:
+        store.write("workflows/tx-1/input.json", b"ab", overwrite=True)
+        store.write("workflows/tx-1/reserve.json", b"abcd", overwrite=True)
+        entries = {name: (path, size) for name, path, size in list_files("workflows/tx-1")}
+        assert entries["input.json"] == ("workflows/tx-1/input.json", 2)
+        assert entries["reserve.json"] == ("workflows/tx-1/reserve.json", 4)
+
+    def test_read_path_returns_bytes(self, store: Store) -> None:
+        store.write("workflows/tx-1/input.json", b'{"ok":true}', overwrite=True)
+        assert read_path("workflows/tx-1/input.json") == b'{"ok":true}'
+
+    def test_read_path_raises_not_found(self, store: Store) -> None:  # noqa: ARG002
+        with pytest.raises(NotFound):
+            read_path("workflows/tx-missing/input.json")

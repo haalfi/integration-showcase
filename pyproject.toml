@@ -52,6 +52,7 @@ all = ["lint", "format-check", "test-cov"]
 demo-happy = "python -m scenarios.demo_happy"
 demo-unhappy = "python -m scenarios.demo_unhappy"
 demo-shipment-failure = "python -m scenarios.demo_shipment_failure"
+stack = "python -m scenarios.stack"
 scenario-happy = "python -m scenarios.run_happy"
 scenario-unhappy = "python -m scenarios.run_unhappy"
 scenario-shipment-failure = "python -m scenarios.run_shipment_failure"
@@ -87,6 +88,7 @@ omit = [
   "scenarios/demo_happy.py",
   "scenarios/demo_unhappy.py",
   "scenarios/demo_shipment_failure.py",
+  "scenarios/stack.py",
 ]
 
 [tool.ruff]
