@@ -53,12 +53,6 @@ Fall:
 - Das Activity-Interface muss idempotent bleiben, damit ein Retry nicht
   zu einem Blob ohne Metadata führt.
 
-> **Hinweis zur Python-Implementierung.** `shared/blob.py` schreibt
-> Bytes und Metadaten in zwei Schritten: `store.write(...)` gefolgt von
-> einem separaten Azure-SDK-Call (`set_blob_metadata`). Das ist ein
-> bekanntes, temporäres Abweichen (BK-005) bis remote-store eine native
-> Metadata-API auf `Store.write()` liefert.
-
 ## Readback
 
 Über die Properties-API des Backends:

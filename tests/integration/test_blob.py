@@ -36,7 +36,7 @@ class TestBlobIntegration:
             download(ref)
 
     def test_etag_populated_from_azurite(self) -> None:
-        """upload() populates BlobRef.etag from Azure ETag via get_file_info()."""
+        """upload() populates BlobRef.etag from WriteResult.etag returned by store.write()."""
         ref = upload(b"etag test payload", "integration/test/etag-check.bin")
         assert ref.etag != "", "Expected non-empty etag from Azurite after upload"
 
@@ -64,8 +64,7 @@ class TestBlobIntegration:
             ),
             # Ingress writes the input blob before Temporal returns a run_id,
             # so run_id is always "" at that point. Pin Azurite's behaviour
-            # for the empty-string case — the metadata layout BK-005 documents
-            # as an accepted limitation.
+            # for the empty-string case — accepted: ingress blob's run_id stays "".
             (
                 "ingress-empty-run-id",
                 {

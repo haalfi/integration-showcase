@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 from collections.abc import Generator
 from contextlib import contextmanager
 
 import pytest
-from remote_store import Capability, FileInfo, NotFound, Store
+from remote_store import NotFound, Store
 from remote_store.backends import MemoryBackend
 
 import integration_showcase.shared.blob as blob_module
@@ -16,22 +15,9 @@ from integration_showcase.shared.blob import download, list_files, list_folders,
 from integration_showcase.shared.envelope import BlobRef
 
 
-class _EtagMemoryBackend(MemoryBackend):
-    """MemoryBackend that injects a fake etag into get_file_info() responses."""
-
-    FAKE_ETAG = "test-etag-abc123"
-
-    def get_file_info(self, path: str) -> FileInfo:
-        return dataclasses.replace(super().get_file_info(path), etag=self.FAKE_ETAG)
-
-
 @pytest.fixture()
 def store(monkeypatch: pytest.MonkeyPatch) -> Store:
-    """Inject a MemoryBackend-backed store via the module-level factory seam.
-
-    Also stubs the metadata seam so tests do not touch Azure even if a caller
-    passes ``metadata=``.
-    """
+    """Inject a MemoryBackend-backed store via the module-level factory seam."""
     s = Store(MemoryBackend())
 
     @contextmanager
@@ -39,21 +25,6 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Store:
         yield s
 
     monkeypatch.setattr(blob_module, "_store_factory", _factory)
-    monkeypatch.setattr(blob_module, "_metadata_setter", lambda _path, _meta: None)
-    return s
-
-
-@pytest.fixture()
-def store_with_etag(monkeypatch: pytest.MonkeyPatch) -> Store:
-    """Inject an _EtagMemoryBackend store that returns a non-empty etag from get_file_info."""
-    s = Store(_EtagMemoryBackend())
-
-    @contextmanager
-    def _factory() -> Generator[Store, None, None]:
-        yield s
-
-    monkeypatch.setattr(blob_module, "_store_factory", _factory)
-    monkeypatch.setattr(blob_module, "_metadata_setter", lambda _path, _meta: None)
     return s
 
 
@@ -111,105 +82,64 @@ class TestUpload:
         assert ref.blob_url == path
 
     def test_etag_empty_for_memory_backend(self, store: Store) -> None:
-        """MemoryBackend supports METADATA but get_file_info() returns etag=None; normalised to ''."""  # noqa: E501
+        """MemoryBackend write response has no etag; WriteResult.etag=None normalises to ''."""
         ref = upload(b"payload", "etag/test.bin")
         assert ref.etag == ""
 
-    def test_etag_populated_when_backend_provides_etag(self, store_with_etag: Store) -> None:
-        """upload() forwards the etag from get_file_info() into BlobRef."""
-        assert store_with_etag.supports(Capability.METADATA)
-        ref = upload(b"payload", "etag/test.bin")
-        assert ref.etag == _EtagMemoryBackend.FAKE_ETAG
-
 
 class TestUploadMetadata:
-    def test_metadata_setter_not_called_when_metadata_absent(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The Azure metadata seam stays untouched when no metadata dict is passed."""
-        s = Store(MemoryBackend())
-
-        @contextmanager
-        def _factory() -> Generator[Store, None, None]:
-            yield s
-
-        monkeypatch.setattr(blob_module, "_store_factory", _factory)
-        calls: list[tuple[str, dict[str, str]]] = []
-        monkeypatch.setattr(
-            blob_module,
-            "_metadata_setter",
-            lambda path, meta: calls.append((path, meta)),
-        )
+    def test_no_metadata_stored_when_none(self, store: Store) -> None:
+        """``metadata=None`` writes the blob without setting any metadata."""
         upload(b"payload", "no-meta/blob.bin")
-        assert calls == []
+        assert store.get_file_info("no-meta/blob.bin").metadata is None
 
-    def test_metadata_setter_receives_path_and_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The Azure metadata seam is invoked once with the caller's dict."""
-        s = Store(MemoryBackend())
-
-        @contextmanager
-        def _factory() -> Generator[Store, None, None]:
-            yield s
-
-        monkeypatch.setattr(blob_module, "_store_factory", _factory)
-        calls: list[tuple[str, dict[str, str]]] = []
-        monkeypatch.setattr(
-            blob_module,
-            "_metadata_setter",
-            lambda path, meta: calls.append((path, meta)),
-        )
+    def test_metadata_stored_with_blob(self, store: Store) -> None:
+        """``metadata=...`` is written atomically and retrievable via get_file_info."""
         meta = {"workflow_id": "wf-1", "step_id": "start"}
         upload(b"payload", "meta/blob.bin", metadata=meta)
-        assert calls == [("meta/blob.bin", meta)]
+        assert store.get_file_info("meta/blob.bin").metadata == meta
 
-    def test_metadata_setter_invoked_with_empty_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """``metadata={}`` reaches the SDK so callers can clear Azure blob metadata.
-
-        Only ``metadata=None`` skips the setter; an empty dict is a distinct intent.
-        """
-        s = Store(MemoryBackend())
-
-        @contextmanager
-        def _factory() -> Generator[Store, None, None]:
-            yield s
-
-        monkeypatch.setattr(blob_module, "_store_factory", _factory)
-        calls: list[tuple[str, dict[str, str]]] = []
-        monkeypatch.setattr(
-            blob_module,
-            "_metadata_setter",
-            lambda path, meta: calls.append((path, meta)),
-        )
+    def test_empty_metadata_dict_reaches_store(self, store: Store) -> None:
+        """``metadata={}`` is passed to the store and clears previously written metadata."""
+        upload(b"payload", "meta/empty.bin", metadata={"k": "v"})
         upload(b"payload", "meta/empty.bin", metadata={})
-        assert calls == [("meta/empty.bin", {})]
+        info = store.get_file_info("meta/empty.bin")
+        # MemoryBackend may return {} or None after an empty-dict write — either is
+        # acceptable, but the "k" key written in the first pass must be gone.
+        assert info.metadata != {"k": "v"}
 
-    def test_metadata_setter_failure_propagates_after_store_write(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "case, meta",
+        [
+            (
+                "full",
+                {
+                    "workflow_id": "order-tx-meta",
+                    "run_id": "run-meta-1",
+                    "step_id": "reserve-inventory",
+                    "schema_version": "1.0",
+                    "idempotency_key": "tx-meta:reserve-inventory:1.0",
+                },
+            ),
+            (
+                "ingress-empty-run-id",
+                {
+                    "workflow_id": "order-tx-ingress",
+                    "run_id": "",
+                    "step_id": "start",
+                    "schema_version": "1.0",
+                    "idempotency_key": "tx-ingress:start:1.0",
+                },
+            ),
+        ],
+    )
+    def test_full_envelope_metadata_roundtrip(
+        self, store: Store, case: str, meta: dict[str, str]
     ) -> None:
-        """A raising _metadata_setter must propagate; the prior store.write must still land.
-
-        The bypass runs *after* ``store.write`` so an Azure metadata-PUT failure
-        leaves a written-but-unlabelled blob. upload() intentionally does not
-        attempt rollback — Temporal activity retry re-runs the whole upload and
-        the overwrite=True write fixes both the bytes and the metadata PUT.
-        """
-        s = Store(MemoryBackend())
-
-        @contextmanager
-        def _factory() -> Generator[Store, None, None]:
-            yield s
-
-        monkeypatch.setattr(blob_module, "_store_factory", _factory)
-
-        def _boom(_path: str, _meta: dict[str, str]) -> None:
-            raise RuntimeError("metadata setter boom")
-
-        monkeypatch.setattr(blob_module, "_metadata_setter", _boom)
-
-        with pytest.raises(RuntimeError, match="metadata setter boom"):
-            upload(b"payload", "fail/blob.bin", metadata={"k": "v"})
-        # Write happened before the setter call, so the blob is persisted.
-        assert s.read_bytes("fail/blob.bin") == b"payload"
+        """Five-key envelope metadata (including empty run_id) round-trips through the store."""
+        path = f"meta/envelope-{case}.bin"
+        upload(b"envelope payload", path, metadata=meta)
+        assert store.get_file_info(path).metadata == meta
 
 
 class TestDownload:

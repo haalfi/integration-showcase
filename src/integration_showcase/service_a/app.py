@@ -100,8 +100,9 @@ async def create_order(request: OrderRequest) -> OrderResponse:
             # Build a stub envelope with an empty sha256 so we can reuse
             # ``envelope.blob_metadata()`` as the single source of truth for
             # the metadata schema. run_id is empty at ingress — Temporal
-            # assigns it when the workflow starts (see BK-005). The real
-            # payload_ref from the upload call replaces the stub below.
+            # assigns it when the workflow starts; the ingress blob's run_id
+            # metadata stays "". The real payload_ref from the upload call
+            # replaces the stub below.
             stub_ref = BlobRef(blob_url=blob_path, sha256="")
             envelope = Envelope(
                 workflow_id=workflow_id,

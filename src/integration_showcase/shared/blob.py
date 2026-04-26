@@ -5,9 +5,8 @@ backend.  STORE_URL holds the Azure / Azurite connection string;
 STORE_CONTAINER holds the container name.  Backend switching (Azurite
 for local dev, Azure Blob Storage for prod) requires no code changes.
 
-Test seams: replace ``_store_factory`` to inject a ``MemoryBackend``-backed
-store; replace ``_metadata_setter`` to observe (or no-op) the Azure SDK
-metadata write. Both via ``monkeypatch.setattr``.
+Test seam: replace ``_store_factory`` to inject a ``MemoryBackend``-backed
+store via ``monkeypatch.setattr``.
 """
 
 from __future__ import annotations
@@ -16,14 +15,11 @@ import hashlib
 import os
 from collections.abc import Callable
 
-from opentelemetry import trace
 from remote_store import Capability, Store
 from remote_store.backends import AzureBackend
 from remote_store.ext.otel import otel_observe
 
 from integration_showcase.shared.envelope import BlobRef
-
-_tracer = trace.get_tracer(__name__)
 
 
 def _make_store() -> Store:
@@ -45,28 +41,9 @@ def _make_store() -> Store:
     return otel_observe(Store(backend))
 
 
-def _set_azure_blob_metadata(path: str, metadata: dict[str, str]) -> None:
-    """Attach Azure blob metadata to *path* via the Azure SDK directly.
-
-    remote-store v0.23.0 has no metadata channel on ``Store.write()`` and
-    ``AzureBackend.unwrap()`` only exposes ``FileSystemClient`` (DataLake /
-    HNS), which our blob-only Azurite does not serve. Until remote-store
-    grows a native metadata API, we reuse ``STORE_URL`` / ``STORE_CONTAINER``
-    to build a ``BlobServiceClient`` and call ``set_blob_metadata`` after
-    the remote-store write completes.
-    """
-    from azure.storage.blob import BlobServiceClient
-
-    connection_string = os.environ["STORE_URL"]
-    container = os.environ["STORE_CONTAINER"]
-    service = BlobServiceClient.from_connection_string(connection_string)
-    service.get_blob_client(container=container, blob=path).set_blob_metadata(metadata)
-
-
-# Module-level seams — replace in tests via monkeypatch.setattr to inject a
-# MemoryBackend-backed store or capture metadata writes without Azure I/O.
+# Module-level seam — replace in tests via monkeypatch.setattr to inject a
+# MemoryBackend-backed store without Azure I/O.
 _store_factory: Callable[[], Store] = _make_store
-_metadata_setter: Callable[[str, dict[str, str]], None] = _set_azure_blob_metadata
 
 
 def upload(data: bytes, path: str, *, metadata: dict[str, str] | None = None) -> BlobRef:
@@ -78,31 +55,28 @@ def upload(data: bytes, path: str, *, metadata: dict[str, str] | None = None) ->
     Args:
         data: Raw payload bytes to store.
         path: Store-relative path, e.g. ``workflows/tx-001/input.json``.
-        metadata: Optional Azure blob metadata (e.g.
-            :meth:`Envelope.blob_metadata`). Applied after the write via the
-            Azure SDK directly — see :func:`_set_azure_blob_metadata`. Keyword-only
-            per DESIGN.md §3 (behavior flags are keyword-only).
+        metadata: Optional blob metadata (e.g. :meth:`Envelope.blob_metadata`).
+            Written atomically with the blob via ``Store.write(metadata=...)``.
+            ``None`` omits the metadata kwarg entirely; an empty dict explicitly
+            clears any existing metadata. Keyword-only per DESIGN.md §3.
 
     Returns:
-        ``BlobRef`` with ``blob_url=path`` and the hex SHA-256 digest.
+        ``BlobRef`` with ``blob_url=path``, the hex SHA-256 digest, and the
+        etag returned by the backend (``""`` when the backend does not echo
+        one in its write response).
     """
     sha256 = hashlib.sha256(data).hexdigest()
-    etag = ""
     with _store_factory() as store:
-        store.write(path, data, overwrite=True)
-        # ``is not None``: an empty dict must still reach the SDK so a caller
-        # can deliberately clear existing Azure blob metadata.
         if metadata is not None:
-            # The Azure SDK bypass sidesteps ``otel_observe``'s ``Store`` wrapper,
-            # so emit a sibling ``store.set_metadata`` span here. Keeps the
-            # metadata PUT visible in Jaeger alongside the ``store.write`` span.
-            with _tracer.start_as_current_span(
-                "store.set_metadata",
-                attributes={"store.path": path, "store.metadata_keys": sorted(metadata)},
-            ):
-                _metadata_setter(path, metadata)
-        if store.supports(Capability.METADATA):
-            etag = store.get_file_info(path).etag or ""
+            if not store.supports(Capability.USER_METADATA):
+                raise RuntimeError(
+                    f"Store backend does not support USER_METADATA; "
+                    f"cannot attach metadata to {path!r}"
+                )
+            result = store.write(path, data, overwrite=True, metadata=metadata)
+        else:
+            result = store.write(path, data, overwrite=True)
+        etag = result.etag or ""
     return BlobRef(blob_url=path, sha256=sha256, etag=etag)
 
 

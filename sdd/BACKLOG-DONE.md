@@ -1,5 +1,20 @@
 # Completed Backlog Items
 
+- [x] **BK-005 -- Remove direct Azure SDK bypass in `shared/blob.py`**
+  remote-store v0.24.0 added `Store.write(metadata=...)` with `Capability.USER_METADATA`
+  (condition (a) from the original item). `AzureBackend` and `MemoryBackend` both declare
+  this capability. `_set_azure_blob_metadata()` and the `_metadata_setter` seam are deleted;
+  metadata is now written atomically with blob bytes in a single `store.write()` call.
+  Etag comes from `WriteResult.etag` returned by `store.write()`, replacing the separate
+  `store.get_file_info()` call from IS-010. `DESIGN.md` carve-out removed; pyproject.toml
+  lower bound bumped to `>=0.24.0`. Unit tests rewritten around `store.get_file_info()`
+  metadata assertions; `_EtagMemoryBackend` and its `store_with_etag` fixture removed (etag
+  comes from `WriteResult` now; the non-empty-etag path is covered by
+  `test_etag_populated_from_azurite`). Integration test `test_metadata_roundtrip_from_azurite`
+  passes unchanged. **Accepted limitation retained:** ingress blob's `run_id` metadata stays
+  `""` (Temporal provides the real run_id only after `start_workflow` returns; the hot-path
+  trade-off documented in the original item still holds).
+
 - [x] **IS-017 -- Interactive stack runner + blob browser**
   Added a long-running, clickable mode alongside the existing one-shot `demo-*`
   scripts. `scenarios/stack.py` (exposed as `hatch run stack`) reuses
