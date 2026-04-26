@@ -10,7 +10,7 @@ Volle Implementierung:
 - **Eine Schicht** kapselt alle Blob-Operationen; Services rufen die
   Helfer auf, nicht das Backend-SDK direkt.
 - Drei Kernfunktionen:
-  - `upload(store, blob_url, data, metadata)`: berechnet SHA-256,
+  - `upload(data, path, *, metadata=None)`: berechnet SHA-256,
     schreibt Bytes und Metadata **atomar** in einem einzigen
     `store.write(metadata=...)` (remote-store ≥ 0.24.0), liefert `BlobRef`.
   - `download(store, ref): bytes`: lädt und verifiziert `sha256`;

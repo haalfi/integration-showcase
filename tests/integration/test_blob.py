@@ -36,7 +36,7 @@ class TestBlobIntegration:
             download(ref)
 
     def test_etag_populated_from_azurite(self) -> None:
-        """upload() populates BlobRef.etag from Azure ETag via get_file_info()."""
+        """upload() populates BlobRef.etag from WriteResult.etag returned by store.write()."""
         ref = upload(b"etag test payload", "integration/test/etag-check.bin")
         assert ref.etag != "", "Expected non-empty etag from Azurite after upload"
 

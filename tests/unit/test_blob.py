@@ -100,12 +100,13 @@ class TestUploadMetadata:
         assert store.get_file_info("meta/blob.bin").metadata == meta
 
     def test_empty_metadata_dict_reaches_store(self, store: Store) -> None:
-        """``metadata={}`` is distinct from ``metadata=None`` — it is passed to the store."""
+        """``metadata={}`` is passed to the store and clears previously written metadata."""
+        upload(b"payload", "meta/empty.bin", metadata={"k": "v"})
         upload(b"payload", "meta/empty.bin", metadata={})
         info = store.get_file_info("meta/empty.bin")
-        # Empty dict: the key is present in metadata (may be {} or None depending on backend)
-        # The critical invariant: no exception is raised; the blob is written.
-        assert info is not None
+        # MemoryBackend may return {} or None after an empty-dict write — either is
+        # acceptable, but the "k" key written in the first pass must be gone.
+        assert info.metadata != {"k": "v"}
 
     @pytest.mark.parametrize(
         "case, meta",

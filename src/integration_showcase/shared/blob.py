@@ -15,7 +15,7 @@ import hashlib
 import os
 from collections.abc import Callable
 
-from remote_store import Store
+from remote_store import Capability, Store
 from remote_store.backends import AzureBackend
 from remote_store.ext.otel import otel_observe
 
@@ -68,6 +68,11 @@ def upload(data: bytes, path: str, *, metadata: dict[str, str] | None = None) ->
     sha256 = hashlib.sha256(data).hexdigest()
     with _store_factory() as store:
         if metadata is not None:
+            if not store.supports(Capability.USER_METADATA):
+                raise RuntimeError(
+                    f"Store backend does not support USER_METADATA; "
+                    f"cannot attach metadata to {path!r}"
+                )
             result = store.write(path, data, overwrite=True, metadata=metadata)
         else:
             result = store.write(path, data, overwrite=True)
