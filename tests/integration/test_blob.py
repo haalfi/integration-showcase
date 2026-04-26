@@ -64,8 +64,7 @@ class TestBlobIntegration:
             ),
             # Ingress writes the input blob before Temporal returns a run_id,
             # so run_id is always "" at that point. Pin Azurite's behaviour
-            # for the empty-string case — the metadata layout BK-005 documents
-            # as an accepted limitation.
+            # for the empty-string case — accepted: ingress blob's run_id stays "".
             (
                 "ingress-empty-run-id",
                 {
